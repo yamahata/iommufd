@@ -1,0 +1,10 @@
+[package]
+name = "mock-tests"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[dependencies]
+iommufd-bindings = { path = "../iommufd-bindings" }
+iommufd-ioctls = { path = "../iommufd-ioctls" }
+libc = "0.2"

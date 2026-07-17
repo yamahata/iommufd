@@ -4,7 +4,7 @@
 //
 
 use std::fs::{self, File, OpenOptions};
-use std::os::unix::io::{AsRawFd, RawFd};
+use std::os::unix::io::{AsRawFd, FromRawFd, RawFd};
 use std::path::Path;
 use std::sync::Arc;
 
@@ -52,7 +52,9 @@ fn detect_cmdqv_hardware() -> bool {
 /// Get the appropriate vIOMMU type for the current hardware
 pub fn get_viommu_type() -> u32 {
     if detect_cmdqv_hardware() {
-        eprintln!("IOMMUFD: Using IOMMU_VIOMMU_TYPE_TEGRA241_CMDQV (type 2) for NVIDIA CMDQV hardware");
+        eprintln!(
+            "IOMMUFD: Using IOMMU_VIOMMU_TYPE_TEGRA241_CMDQV (type 2) for NVIDIA CMDQV hardware"
+        );
         IOMMU_VIOMMU_TYPE_TEGRA241_CMDQV
     } else {
         eprintln!("IOMMUFD: Using IOMMU_VIOMMU_TYPE_ARM_SMMUV3 (type 1) for generic ARM SMMUv3");
@@ -114,12 +116,24 @@ impl IommuFd {
     pub fn alloc_iommu_vdevice(&self, vdevice_alloc: &mut iommu_vdevice_alloc) -> Result<()> {
         iommufd_syscall::alloc_iommu_vdevice(self, vdevice_alloc)
     }
+
+    pub fn alloc_iommu_veventq(&self, veventq_alloc: &mut iommu_veventq_alloc) -> Result<()> {
+        iommufd_syscall::alloc_iommu_veventq(self, veventq_alloc)
+    }
 }
 
-#[derive(Debug, Copy, Clone)]
+#[derive(Debug, Clone)]
 pub enum IommufdInvalidateData {
     Smmuv3(iommu_viommu_arm_smmuv3_invalidate),
     Vtd(iommu_hwpt_vtd_s1_invalidate),
+    /// Driver-specific invalidation entries in raw form: `data_type` is a
+    /// value of `enum iommu_hwpt_invalidate_data_type`, `entry_len` the
+    /// size of one entry, and `entries` a packed array of entries.
+    Raw {
+        data_type: u32,
+        entry_len: u32,
+        entries: Vec<u8>,
+    },
 }
 
 #[derive(Clone)]
@@ -128,8 +142,8 @@ pub struct IommufdVIommu {
     pub viommu_id: u32,
     pub dev_id: u32,
     pub s2_hwpt_id: u32,
-    pub bypass_hwpt_id: u32,
-    pub abort_hwpt_id: u32,
+    pub bypass_hwpt_id: Option<u32>,
+    pub abort_hwpt_id: Option<u32>,
 }
 
 impl IommufdVIommu {
@@ -153,7 +167,91 @@ impl IommufdVIommu {
         const SMMU_STE_VALID: u64 = 1 << 0;
         const SMMU_STE_CFG_BYPASS: u64 = 1 << 3;
 
-        // Allocate s2_hwpt who will be shared for all devices behind this vIOMMU instance
+        // Use the auto-detected type for CMDQV support. For CMDQV the
+        // kernel returns the VINTF page0 mmap coordinates as driver data.
+        let viommu_type = get_viommu_type();
+        let mut cmdqv_data = iommu_viommu_tegra241_cmdqv::default();
+        let viommu_data = if viommu_type == IOMMU_VIOMMU_TYPE_TEGRA241_CMDQV {
+            Some((
+                &mut cmdqv_data as *mut iommu_viommu_tegra241_cmdqv as u64,
+                std::mem::size_of::<iommu_viommu_tegra241_cmdqv>() as u32,
+            ))
+        } else {
+            None
+        };
+
+        let mut viommu = Self::new_with_type(iommufd, ioas_id, dev_id, viommu_type, viommu_data)?;
+
+        // Allocate the bypass s1_hwpt used while the virtual IOMMU is not
+        // yet initialized by the guest, and the abort s1_hwpt used when
+        // the guest configures a stream for abort.
+        // For CMDQV, use viommu_id as pt_id instead of s2_hwpt_id.
+        let s1_pt_id = if viommu_type == IOMMU_VIOMMU_TYPE_TEGRA241_CMDQV {
+            viommu.viommu_id
+        } else {
+            viommu.s2_hwpt_id
+        };
+
+        let bypass_s1_hwpt_data = iommu_hwpt_arm_smmuv3 {
+            ste: [SMMU_STE_CFG_BYPASS | SMMU_STE_VALID, 0x0],
+        };
+        let mut bypass_iommufd_hwpt_alloc = iommu_hwpt_alloc {
+            size: std::mem::size_of::<iommu_hwpt_alloc>() as u32,
+            dev_id,
+            pt_id: s1_pt_id,
+            data_type: s1_hwpt_data_type,
+            data_len: std::mem::size_of::<iommu_hwpt_arm_smmuv3>() as u32,
+            data_uptr: &bypass_s1_hwpt_data as *const iommu_hwpt_arm_smmuv3 as u64,
+            ..Default::default()
+        };
+        viommu
+            .iommufd
+            .alloc_iommu_hwpt(&mut bypass_iommufd_hwpt_alloc)?;
+        viommu.bypass_hwpt_id = Some(bypass_iommufd_hwpt_alloc.out_hwpt_id);
+
+        let abort_s1_hwpt_data = iommu_hwpt_arm_smmuv3 {
+            ste: [SMMU_STE_VALID, 0x0],
+        };
+        let mut abort_iommufd_hwpt_alloc = iommu_hwpt_alloc {
+            size: std::mem::size_of::<iommu_hwpt_alloc>() as u32,
+            dev_id,
+            pt_id: s1_pt_id,
+            data_type: s1_hwpt_data_type,
+            data_len: std::mem::size_of::<iommu_hwpt_arm_smmuv3>() as u32,
+            data_uptr: &abort_s1_hwpt_data as *const iommu_hwpt_arm_smmuv3 as u64,
+            ..Default::default()
+        };
+        viommu
+            .iommufd
+            .alloc_iommu_hwpt(&mut abort_iommufd_hwpt_alloc)?;
+        viommu.abort_hwpt_id = Some(abort_iommufd_hwpt_alloc.out_hwpt_id);
+
+        Ok(viommu)
+    }
+
+    /// Create a vIOMMU of an explicit type, without any driver-specific
+    /// child HWPTs.
+    ///
+    /// Allocates the stage-2 nesting-parent HWPT over `ioas_id` for
+    /// `dev_id` and a vIOMMU of `viommu_type` on top of it. Driver data
+    /// for the vIOMMU allocation can be passed as a raw
+    /// (user pointer, length) pair in `viommu_data`.
+    ///
+    /// # Arguments
+    /// * `iommufd` - The iommufd instance to use
+    /// * `ioas_id` - The IOAS the stage-2 nesting parent translates
+    /// * `dev_id` - The iommufd device ID the allocations validate against
+    /// * `viommu_type` - A value of `enum iommu_viommu_type`
+    /// * `viommu_data` - Optional (data_uptr, data_len) driver data
+    pub fn new_with_type(
+        iommufd: Arc<IommuFd>,
+        ioas_id: u32,
+        dev_id: u32,
+        viommu_type: u32,
+        viommu_data: Option<(u64, u32)>,
+    ) -> Result<Self> {
+        // Allocate the s2_hwpt shared by all devices behind this vIOMMU
+        // instance.
         let mut s2_iommufd_hwpt_alloc = iommu_hwpt_alloc {
             size: std::mem::size_of::<iommu_hwpt_alloc>() as u32,
             flags: iommufd_hwpt_alloc_flags_IOMMU_HWPT_ALLOC_NEST_PARENT,
@@ -165,25 +263,9 @@ impl IommufdVIommu {
         iommufd.alloc_iommu_hwpt(&mut s2_iommufd_hwpt_alloc)?;
         let s2_hwpt_id = s2_iommufd_hwpt_alloc.out_hwpt_id;
 
-        // Allocate vIOMMU - use auto-detected type for CMDQV support
-        let viommu_type = get_viommu_type();
-        let struct_size = std::mem::size_of::<iommu_viommu_alloc>();
-        eprintln!("DEBUG: iommu_viommu_alloc struct size = {} bytes (expected 40)", struct_size);
-
-        // For CMDQV, we need to pass the tegra241_cmdqv struct for output data
-        let mut cmdqv_data = iommu_viommu_tegra241_cmdqv::default();
-        let (data_len, data_uptr) = if viommu_type == IOMMU_VIOMMU_TYPE_TEGRA241_CMDQV {
-            eprintln!("DEBUG: Using CMDQV data struct, size = {}", std::mem::size_of::<iommu_viommu_tegra241_cmdqv>());
-            (
-                std::mem::size_of::<iommu_viommu_tegra241_cmdqv>() as u32,
-                &mut cmdqv_data as *mut iommu_viommu_tegra241_cmdqv as u64,
-            )
-        } else {
-            (0, 0)
-        };
-
+        let (data_uptr, data_len) = viommu_data.unwrap_or((0, 0));
         let mut viommu_alloc = iommu_viommu_alloc {
-            size: struct_size as u32,
+            size: std::mem::size_of::<iommu_viommu_alloc>() as u32,
             type_: viommu_type,
             hwpt_id: s2_hwpt_id,
             dev_id,
@@ -191,75 +273,41 @@ impl IommufdVIommu {
             data_uptr,
             ..Default::default()
         };
-        eprintln!("DEBUG: viommu_alloc = {{ size: {}, flags: {}, type_: {}, dev_id: {}, hwpt_id: {}, data_len: {}, __reserved: {}, data_uptr: 0x{:x} }}",
-            viommu_alloc.size, viommu_alloc.flags, viommu_alloc.type_,
-            viommu_alloc.dev_id, viommu_alloc.hwpt_id,
-            viommu_alloc.data_len, viommu_alloc.__reserved, viommu_alloc.data_uptr);
         iommufd.alloc_iommu_viommu(&mut viommu_alloc)?;
-
-        if viommu_type == IOMMU_VIOMMU_TYPE_TEGRA241_CMDQV {
-            eprintln!("DEBUG: CMDQV output: vintf_page0_pgoff=0x{:x}, vintf_page0_pgsz=0x{:x}",
-                cmdqv_data.out_vintf_page0_pgoff, cmdqv_data.out_vintf_page0_pgsz);
-        }
-        let viommu_id = viommu_alloc.out_viommu_id;
-
-        // ALlocate bypass s1_hwpt which will be used when the virtual IOMMU
-        // is not initilized by the guest
-        // For CMDQV, use viommu_id as pt_id instead of s2_hwpt_id
-        let bypass_pt_id = if viommu_type == IOMMU_VIOMMU_TYPE_TEGRA241_CMDQV {
-            viommu_id
-        } else {
-            s2_hwpt_id
-        };
-        eprintln!("DEBUG: Allocating bypass s1_hwpt with pt_id={} (viommu_id={}, s2_hwpt_id={})",
-            bypass_pt_id, viommu_id, s2_hwpt_id);
-        let bypass_s1_hwpt_data = iommu_hwpt_arm_smmuv3 {
-            ste: [SMMU_STE_CFG_BYPASS | SMMU_STE_VALID, 0x0],
-        };
-        let mut bypass_iommufd_hwpt_alloc = iommu_hwpt_alloc {
-            size: std::mem::size_of::<iommu_hwpt_alloc>() as u32,
-            dev_id,
-            pt_id: bypass_pt_id,
-            data_type: s1_hwpt_data_type,
-            data_len: std::mem::size_of::<iommu_hwpt_arm_smmuv3>() as u32,
-            data_uptr: &bypass_s1_hwpt_data as *const iommu_hwpt_arm_smmuv3 as u64,
-            ..Default::default()
-        };
-        iommufd.alloc_iommu_hwpt(&mut bypass_iommufd_hwpt_alloc)?;
-        let bypass_hwpt_id = bypass_iommufd_hwpt_alloc.out_hwpt_id;
-        eprintln!("DEBUG: bypass s1_hwpt allocated: hwpt_id={}", bypass_hwpt_id);
-
-        // Allocate abort s1_hwpt which will be used when the virtual IOMMU
-        // is configured in such mode
-        let abort_pt_id = if viommu_type == IOMMU_VIOMMU_TYPE_TEGRA241_CMDQV {
-            viommu_id
-        } else {
-            s2_hwpt_id
-        };
-        eprintln!("DEBUG: Allocating abort s1_hwpt with pt_id={}", abort_pt_id);
-        let abort_s1_hwpt_data = iommu_hwpt_arm_smmuv3 {
-            ste: [SMMU_STE_VALID, 0x0],
-        };
-        let mut abort_iommufd_hwpt_alloc = iommu_hwpt_alloc {
-            size: std::mem::size_of::<iommu_hwpt_alloc>() as u32,
-            dev_id,
-            pt_id: abort_pt_id,
-            data_type: s1_hwpt_data_type,
-            data_len: std::mem::size_of::<iommu_hwpt_arm_smmuv3>() as u32,
-            data_uptr: &abort_s1_hwpt_data as *const iommu_hwpt_arm_smmuv3 as u64,
-            ..Default::default()
-        };
-        iommufd.alloc_iommu_hwpt(&mut abort_iommufd_hwpt_alloc)?;
-        let abort_hwpt_id = abort_iommufd_hwpt_alloc.out_hwpt_id;
-        eprintln!("DEBUG: abort s1_hwpt allocated: hwpt_id={}", abort_hwpt_id);
 
         Ok(IommufdVIommu {
             iommufd,
-            viommu_id,
+            viommu_id: viommu_alloc.out_viommu_id,
             dev_id,
             s2_hwpt_id,
-            bypass_hwpt_id,
-            abort_hwpt_id,
+            bypass_hwpt_id: None,
+            abort_hwpt_id: None,
+        })
+    }
+
+    /// Allocate a virtual event queue for this vIOMMU.
+    ///
+    /// # Arguments
+    /// * `veventq_type` - A value of `enum iommu_veventq_type`
+    /// * `depth` - Maximum number of events held in the vEVENTQ
+    pub fn alloc_veventq(&self, veventq_type: u32, depth: u32) -> Result<IommufdVEventQ> {
+        let mut veventq_alloc = iommu_veventq_alloc {
+            size: std::mem::size_of::<iommu_veventq_alloc>() as u32,
+            viommu_id: self.viommu_id,
+            type_: veventq_type,
+            veventq_depth: depth,
+            ..Default::default()
+        };
+        self.iommufd.alloc_iommu_veventq(&mut veventq_alloc)?;
+
+        // SAFETY: on success the kernel returns a fresh, open fd that we
+        // exclusively own from this point on.
+        let fd = unsafe { File::from_raw_fd(veventq_alloc.out_veventq_fd as RawFd) };
+
+        Ok(IommufdVEventQ {
+            iommufd: self.iommufd.clone(),
+            veventq_id: veventq_alloc.out_veventq_id,
+            fd,
         })
     }
 
@@ -272,7 +320,8 @@ impl IommufdVIommu {
     pub fn invalidate_hwpt(&self, cmd: &mut IommufdInvalidateData) -> Result<bool> {
         match cmd {
             IommufdInvalidateData::Smmuv3(data) => {
-                eprintln!("DEBUG: invalidate_hwpt: viommu_id={}, cmd[0]=0x{:016x}, cmd[1]=0x{:016x}",
+                eprintln!(
+                    "DEBUG: invalidate_hwpt: viommu_id={}, cmd[0]=0x{:016x}, cmd[1]=0x{:016x}",
                     self.viommu_id, data.cmd[0], data.cmd[1]
                 );
                 let mut hw_invalidate = iommu_hwpt_invalidate {
@@ -286,8 +335,10 @@ impl IommufdVIommu {
                     ..Default::default()
                 };
                 let result = self.iommufd.invalidate_hwpt(&mut hw_invalidate);
-                eprintln!("DEBUG: invalidate_hwpt result: {:?}, entry_num after={}",
-                    result.is_ok(), hw_invalidate.entry_num
+                eprintln!(
+                    "DEBUG: invalidate_hwpt result: {:?}, entry_num after={}",
+                    result.is_ok(),
+                    hw_invalidate.entry_num
                 );
                 result?;
 
@@ -300,6 +351,27 @@ impl IommufdVIommu {
             IommufdInvalidateData::Vtd(_) => {
                 unimplemented!()
             }
+            IommufdInvalidateData::Raw {
+                data_type,
+                entry_len,
+                entries,
+            } => {
+                if *entry_len == 0 || entries.len() % (*entry_len as usize) != 0 {
+                    return Err(IommufdError::InvalidInvalidateData);
+                }
+                let entry_num = (entries.len() / (*entry_len as usize)) as u32;
+                let mut hw_invalidate = iommu_hwpt_invalidate {
+                    size: std::mem::size_of::<iommu_hwpt_invalidate>() as u32,
+                    hwpt_id: self.viommu_id,
+                    data_type: *data_type,
+                    entry_len: *entry_len,
+                    entry_num,
+                    data_uptr: entries.as_ptr() as u64,
+                    ..Default::default()
+                };
+                self.iommufd.invalidate_hwpt(&mut hw_invalidate)?;
+                Ok(hw_invalidate.entry_num == entry_num)
+            }
         }
     }
 }
@@ -309,12 +381,16 @@ impl Drop for IommufdVIommu {
         // Destroy in reverse order of creation - children before parents
         // Order: bypass_hwpt -> abort_hwpt -> viommu -> s2_hwpt
 
-        if let Err(e) = self.iommufd.destroy_iommufd(self.bypass_hwpt_id) {
-            eprintln!("Failed to destroy bypass_hwpt id {}: {}", self.bypass_hwpt_id, e);
+        if let Some(bypass_hwpt_id) = self.bypass_hwpt_id {
+            if let Err(e) = self.iommufd.destroy_iommufd(bypass_hwpt_id) {
+                eprintln!("Failed to destroy bypass_hwpt id {bypass_hwpt_id}: {e}");
+            }
         }
 
-        if let Err(e) = self.iommufd.destroy_iommufd(self.abort_hwpt_id) {
-            eprintln!("Failed to destroy abort_hwpt id {}: {}", self.abort_hwpt_id, e);
+        if let Some(abort_hwpt_id) = self.abort_hwpt_id {
+            if let Err(e) = self.iommufd.destroy_iommufd(abort_hwpt_id) {
+                eprintln!("Failed to destroy abort_hwpt id {abort_hwpt_id}: {e}");
+            }
         }
 
         if let Err(e) = self.iommufd.destroy_iommufd(self.viommu_id) {
@@ -333,10 +409,32 @@ pub enum IommufdHwInfoData {
     Vtd(iommu_hw_info_vtd),
 }
 
-#[derive(Debug, Copy, Clone)]
+#[derive(Debug, Clone)]
 pub enum IommufdHwptData {
     Smmuv3(iommu_hwpt_arm_smmuv3),
     Vtd(iommu_hwpt_vtd_s1),
+    /// Driver-specific HWPT data in raw form: `data_type` is a value of
+    /// `enum iommu_hwpt_data_type` and `data` the packed driver struct.
+    Raw {
+        data_type: u32,
+        data: Vec<u8>,
+    },
+}
+
+/// A virtual event queue tied to a vIOMMU. Events are read from `fd`;
+/// the queue object is destroyed on drop.
+pub struct IommufdVEventQ {
+    pub iommufd: Arc<IommuFd>,
+    pub veventq_id: u32,
+    pub fd: File,
+}
+
+impl Drop for IommufdVEventQ {
+    fn drop(&mut self) {
+        if let Err(e) = self.iommufd.destroy_iommufd(self.veventq_id) {
+            eprintln!("Failed to destroy vEVENTQ id {}: {}", self.veventq_id, e);
+        }
+    }
 }
 
 #[derive(Clone)]
@@ -381,10 +479,12 @@ impl IommufdVDevice {
 
         match hwpt_data {
             IommufdHwptData::Smmuv3(data) => {
-                eprintln!("DEBUG: allocate_s1_hwpt: vdevice_id={}, dev_id={}, viommu_id={}, virt_id=0x{:x}",
+                eprintln!(
+                    "DEBUG: allocate_s1_hwpt: vdevice_id={}, dev_id={}, viommu_id={}, virt_id=0x{:x}",
                     self.vdevice_id, self.dev_id, self.viommu.viommu_id, self.virt_id
                 );
-                eprintln!("DEBUG: allocate_s1_hwpt: STE[0]=0x{:016x}, STE[1]=0x{:016x}",
+                eprintln!(
+                    "DEBUG: allocate_s1_hwpt: STE[0]=0x{:016x}, STE[1]=0x{:016x}",
                     data.ste[0], data.ste[1]
                 );
                 let mut s1_iommufd_hwpt_alloc = iommu_hwpt_alloc {
@@ -396,14 +496,18 @@ impl IommufdVDevice {
                     data_uptr: data as *const iommu_hwpt_arm_smmuv3 as u64,
                     ..Default::default()
                 };
-                let result = self.viommu
+                let result = self
+                    .viommu
                     .iommufd
                     .alloc_iommu_hwpt(&mut s1_iommufd_hwpt_alloc);
 
                 match result {
                     Ok(()) => {
                         let s1_hwpt_id = s1_iommufd_hwpt_alloc.out_hwpt_id;
-                        eprintln!("DEBUG: allocate_s1_hwpt: success, s1_hwpt_id={}", s1_hwpt_id);
+                        eprintln!(
+                            "DEBUG: allocate_s1_hwpt: success, s1_hwpt_id={}",
+                            s1_hwpt_id
+                        );
                         self.s1_hwpt_id = Some(s1_hwpt_id);
                         Ok(s1_hwpt_id)
                     }
@@ -414,6 +518,23 @@ impl IommufdVDevice {
                 }
             }
             IommufdHwptData::Vtd(_) => unimplemented!(),
+            IommufdHwptData::Raw { data_type, data } => {
+                let mut s1_iommufd_hwpt_alloc = iommu_hwpt_alloc {
+                    size: std::mem::size_of::<iommu_hwpt_alloc>() as u32,
+                    dev_id: self.dev_id,
+                    pt_id: self.viommu.viommu_id,
+                    data_type: *data_type,
+                    data_len: data.len() as u32,
+                    data_uptr: data.as_ptr() as u64,
+                    ..Default::default()
+                };
+                self.viommu
+                    .iommufd
+                    .alloc_iommu_hwpt(&mut s1_iommufd_hwpt_alloc)?;
+                let s1_hwpt_id = s1_iommufd_hwpt_alloc.out_hwpt_id;
+                self.s1_hwpt_id = Some(s1_hwpt_id);
+                Ok(s1_hwpt_id)
+            }
         }
     }
 
@@ -514,6 +635,11 @@ ioctl_io_nr!(
     IOMMU_VDEVICE_ALLOC,
     IOMMUFD_TYPE as u32,
     IOMMUFD_CMD_VDEVICE_ALLOC
+);
+ioctl_io_nr!(
+    IOMMU_VEVENTQ_ALLOC,
+    IOMMUFD_TYPE as u32,
+    IOMMUFD_CMD_VEVENTQ_ALLOC
 );
 
 // Safety:
@@ -664,6 +790,23 @@ pub(crate) mod iommufd_syscall {
             Ok(())
         }
     }
+
+    pub(crate) fn alloc_iommu_veventq(
+        iommufd: &IommuFd,
+        veventq_alloc: &mut iommu_veventq_alloc,
+    ) -> Result<()> {
+        // SAFETY:
+        // 1. The file descriptor provided by 'iommufd' is valid and open.
+        // 2. The 'veventq_alloc' points to initialized memory with expected data structure,
+        // and remains valid for the duration of syscall.
+        // 3. The return value is checked.
+        let ret = unsafe { ioctl_with_mut_ref(iommufd, IOMMU_VEVENTQ_ALLOC(), veventq_alloc) };
+        if ret < 0 {
+            Err(IommufdError::IommuVeventqAlloc(SysError::last()))
+        } else {
+            Ok(())
+        }
+    }
 }
 
 #[cfg(test)]
@@ -681,5 +824,6 @@ mod tests {
         assert_eq!(IOMMUFD_HWPT_INVALIDATE(), 15245);
         assert_eq!(IOMMU_VIOMMU_ALLOC(), 15248);
         assert_eq!(IOMMU_VDEVICE_ALLOC(), 15249);
+        assert_eq!(IOMMU_VEVENTQ_ALLOC(), 15251);
     }
 }

@@ -854,8 +854,10 @@ pub struct iommu_viommu_tegra241_cmdqv {
 }
 #[allow(clippy::unnecessary_operation, clippy::identity_op)]
 const _: () = {
-    ["Size of iommu_viommu_tegra241_cmdqv"][::std::mem::size_of::<iommu_viommu_tegra241_cmdqv>() - 16usize];
-    ["Alignment of iommu_viommu_tegra241_cmdqv"][::std::mem::align_of::<iommu_viommu_tegra241_cmdqv>() - 8usize];
+    ["Size of iommu_viommu_tegra241_cmdqv"]
+        [::std::mem::size_of::<iommu_viommu_tegra241_cmdqv>() - 16usize];
+    ["Alignment of iommu_viommu_tegra241_cmdqv"]
+        [::std::mem::align_of::<iommu_viommu_tegra241_cmdqv>() - 8usize];
 };
 #[doc = " struct iommu_viommu_alloc - ioctl(IOMMU_VIOMMU_ALLOC)\n @size: sizeof(struct iommu_viommu_alloc)\n @flags: Must be 0\n @type: Type of the virtual IOMMU. Must be defined in enum iommu_viommu_type\n @dev_id: The device's physical IOMMU will be used to back the virtual IOMMU\n @hwpt_id: ID of a nesting parent HWPT to associate to\n @out_viommu_id: Output virtual IOMMU ID for the allocated object\n\n Allocate a virtual IOMMU object, representing the underlying physical IOMMU's\n virtualization support that is a security-isolated slice of the real IOMMU HW\n that is unique to a specific VM. Operations global to the IOMMU are connected\n to the vIOMMU, such as:\n - Security namespace for guest owned ID, e.g. guest-controlled cache tags\n - Non-device-affiliated event reporting, e.g. invalidation queue errors\n - Access to a sharable nesting parent pagetable across physical IOMMUs\n - Virtualization of various platforms IDs, e.g. RIDs and others\n - Delivery of paravirtualized invalidation\n - Direct assigned invalidation queues\n - Direct assigned interrupts"]
 #[repr(C)]
