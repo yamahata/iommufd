@@ -83,7 +83,7 @@ impl IommuFd {
         IommuFd { iommufd: file }
     }
 
-    pub fn destroy_iommufd(&self, id: u32) -> Result<()> {
+    pub fn destroy_iommu_object(&self, id: u32) -> Result<()> {
         let destroy_data = iommu_destroy {
             size: std::mem::size_of::<iommu_destroy>() as u32,
             id,
@@ -388,22 +388,22 @@ impl Drop for IommufdVIommu {
         // Order: bypass_hwpt -> abort_hwpt -> viommu -> s2_hwpt
 
         if let Some(bypass_hwpt_id) = self.bypass_hwpt_id {
-            if let Err(e) = self.iommufd.destroy_iommufd(bypass_hwpt_id) {
+            if let Err(e) = self.iommufd.destroy_iommu_object(bypass_hwpt_id) {
                 eprintln!("Failed to destroy bypass_hwpt id {bypass_hwpt_id}: {e}");
             }
         }
 
         if let Some(abort_hwpt_id) = self.abort_hwpt_id {
-            if let Err(e) = self.iommufd.destroy_iommufd(abort_hwpt_id) {
+            if let Err(e) = self.iommufd.destroy_iommu_object(abort_hwpt_id) {
                 eprintln!("Failed to destroy abort_hwpt id {abort_hwpt_id}: {e}");
             }
         }
 
-        if let Err(e) = self.iommufd.destroy_iommufd(self.viommu_id) {
+        if let Err(e) = self.iommufd.destroy_iommu_object(self.viommu_id) {
             eprintln!("Failed to destroy vIOMMU id {}: {}", self.viommu_id, e);
         }
 
-        if let Err(e) = self.iommufd.destroy_iommufd(self.s2_hwpt_id) {
+        if let Err(e) = self.iommufd.destroy_iommu_object(self.s2_hwpt_id) {
             eprintln!("Failed to destroy s2_hwpt id {}: {}", self.s2_hwpt_id, e);
         }
     }
@@ -437,7 +437,7 @@ pub struct IommufdVEventQ {
 
 impl Drop for IommufdVEventQ {
     fn drop(&mut self) {
-        if let Err(e) = self.iommufd.destroy_iommufd(self.veventq_id) {
+        if let Err(e) = self.iommufd.destroy_iommu_object(self.veventq_id) {
             eprintln!("Failed to destroy vEVENTQ id {}: {}", self.veventq_id, e);
         }
     }
@@ -547,7 +547,7 @@ impl IommufdVDevice {
     /// Destroy s1 hwpt for the vDevice
     pub fn destroy_s1_hwpt(&mut self) -> Result<()> {
         if let Some(s1_hwpt_id) = self.s1_hwpt_id {
-            self.viommu.iommufd.destroy_iommufd(s1_hwpt_id)?;
+            self.viommu.iommufd.destroy_iommu_object(s1_hwpt_id)?;
             self.s1_hwpt_id = None;
         }
         Ok(())
@@ -581,7 +581,7 @@ impl Drop for IommufdVDevice {
     fn drop(&mut self) {
         self.viommu
             .iommufd
-            .destroy_iommufd(self.vdevice_id)
+            .destroy_iommu_object(self.vdevice_id)
             .inspect_err(|e| {
                 eprintln!("Failed to destroy vDevice id {}: {}", self.vdevice_id, e);
             })
@@ -590,7 +590,7 @@ impl Drop for IommufdVDevice {
         if let Some(s1_hwpt_id) = self.s1_hwpt_id {
             self.viommu
                 .iommufd
-                .destroy_iommufd(s1_hwpt_id)
+                .destroy_iommu_object(s1_hwpt_id)
                 .inspect_err(|e| {
                     eprintln!("Failed to destroy s1_hwpt id {}: {}", s1_hwpt_id, e);
                 })

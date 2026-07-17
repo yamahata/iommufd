@@ -320,11 +320,11 @@ fn main() {
     /* The mock's own objects (stdev, its auto domain, the IOAS) form a
      * dependency cycle that the kernel reclaims atomically when the
      * iommufd fd is closed - the same convention the kernel selftest
-     * uses. Destroying the stdev is a real destroy_iommufd verb call;
+     * uses. Destroying the stdev is a real destroy_iommu_object verb call;
      * the rest is left to fd close on drop. */
     h.step(
         "destroy mock stdev",
-        iommufd.destroy_iommufd(mock.out_stdev_id),
+        iommufd.destroy_iommu_object(mock.out_stdev_id),
     );
     drop(iommufd);
     println!("MOCKTEST ok    - iommufd fd closed (IOAS + mock domain reclaimed)");
