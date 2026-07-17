@@ -77,6 +77,12 @@ impl IommuFd {
         Ok(IommuFd { iommufd })
     }
 
+    /// Wrap an already-open iommufd file (e.g. one passed in from a
+    /// higher layer). Kept API-compatible with the upstream crate.
+    pub fn new_from_fd(file: File) -> Self {
+        IommuFd { iommufd: file }
+    }
+
     pub fn destroy_iommufd(&self, id: u32) -> Result<()> {
         let destroy_data = iommu_destroy {
             size: std::mem::size_of::<iommu_destroy>() as u32,
