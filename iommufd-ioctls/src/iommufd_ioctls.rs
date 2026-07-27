@@ -387,16 +387,16 @@ impl Drop for IommufdVIommu {
         // Destroy in reverse order of creation - children before parents
         // Order: bypass_hwpt -> abort_hwpt -> viommu -> s2_hwpt
 
-        if let Some(bypass_hwpt_id) = self.bypass_hwpt_id {
-            if let Err(e) = self.iommufd.destroy_iommu_object(bypass_hwpt_id) {
-                eprintln!("Failed to destroy bypass_hwpt id {bypass_hwpt_id}: {e}");
-            }
+        if let Some(bypass_hwpt_id) = self.bypass_hwpt_id
+            && let Err(e) = self.iommufd.destroy_iommu_object(bypass_hwpt_id)
+        {
+            eprintln!("Failed to destroy bypass_hwpt id {bypass_hwpt_id}: {e}");
         }
 
-        if let Some(abort_hwpt_id) = self.abort_hwpt_id {
-            if let Err(e) = self.iommufd.destroy_iommu_object(abort_hwpt_id) {
-                eprintln!("Failed to destroy abort_hwpt id {abort_hwpt_id}: {e}");
-            }
+        if let Some(abort_hwpt_id) = self.abort_hwpt_id
+            && let Err(e) = self.iommufd.destroy_iommu_object(abort_hwpt_id)
+        {
+            eprintln!("Failed to destroy abort_hwpt id {abort_hwpt_id}: {e}");
         }
 
         if let Err(e) = self.iommufd.destroy_iommu_object(self.viommu_id) {
