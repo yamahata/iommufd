@@ -52,12 +52,8 @@ fn detect_cmdqv_hardware() -> bool {
 /// Get the appropriate vIOMMU type for the current hardware
 pub fn get_viommu_type() -> u32 {
     if detect_cmdqv_hardware() {
-        eprintln!(
-            "IOMMUFD: Using IOMMU_VIOMMU_TYPE_TEGRA241_CMDQV (type 2) for NVIDIA CMDQV hardware"
-        );
         IOMMU_VIOMMU_TYPE_TEGRA241_CMDQV
     } else {
-        eprintln!("IOMMUFD: Using IOMMU_VIOMMU_TYPE_ARM_SMMUV3 (type 1) for generic ARM SMMUv3");
         IOMMU_VIOMMU_TYPE_ARM_SMMUV3
     }
 }
@@ -326,10 +322,6 @@ impl IommufdVIommu {
     pub fn invalidate_hwpt(&self, cmd: &mut IommufdInvalidateData) -> Result<bool> {
         match cmd {
             IommufdInvalidateData::Smmuv3(data) => {
-                eprintln!(
-                    "DEBUG: invalidate_hwpt: viommu_id={}, cmd[0]=0x{:016x}, cmd[1]=0x{:016x}",
-                    self.viommu_id, data.cmd[0], data.cmd[1]
-                );
                 let mut hw_invalidate = iommu_hwpt_invalidate {
                     size: std::mem::size_of::<iommu_hwpt_invalidate>() as u32,
                     hwpt_id: self.viommu_id,
@@ -341,11 +333,6 @@ impl IommufdVIommu {
                     ..Default::default()
                 };
                 let result = self.iommufd.invalidate_hwpt(&mut hw_invalidate);
-                eprintln!(
-                    "DEBUG: invalidate_hwpt result: {:?}, entry_num after={}",
-                    result.is_ok(),
-                    hw_invalidate.entry_num
-                );
                 result?;
 
                 if hw_invalidate.entry_num == 1 {
@@ -485,14 +472,6 @@ impl IommufdVDevice {
 
         match hwpt_data {
             IommufdHwptData::Smmuv3(data) => {
-                eprintln!(
-                    "DEBUG: allocate_s1_hwpt: vdevice_id={}, dev_id={}, viommu_id={}, virt_id=0x{:x}",
-                    self.vdevice_id, self.dev_id, self.viommu.viommu_id, self.virt_id
-                );
-                eprintln!(
-                    "DEBUG: allocate_s1_hwpt: STE[0]=0x{:016x}, STE[1]=0x{:016x}",
-                    data.ste[0], data.ste[1]
-                );
                 let mut s1_iommufd_hwpt_alloc = iommu_hwpt_alloc {
                     size: std::mem::size_of::<iommu_hwpt_alloc>() as u32,
                     dev_id: self.dev_id,
@@ -510,17 +489,10 @@ impl IommufdVDevice {
                 match result {
                     Ok(()) => {
                         let s1_hwpt_id = s1_iommufd_hwpt_alloc.out_hwpt_id;
-                        eprintln!(
-                            "DEBUG: allocate_s1_hwpt: success, s1_hwpt_id={}",
-                            s1_hwpt_id
-                        );
                         self.s1_hwpt_id = Some(s1_hwpt_id);
                         Ok(s1_hwpt_id)
                     }
-                    Err(e) => {
-                        eprintln!("DEBUG: allocate_s1_hwpt: failed: {:?}", e);
-                        Err(e)
-                    }
+                    Err(e) => Err(e),
                 }
             }
             IommufdHwptData::Vtd(_) => unimplemented!(),
@@ -579,22 +551,14 @@ impl IommufdVDevice {
 
 impl Drop for IommufdVDevice {
     fn drop(&mut self) {
-        self.viommu
-            .iommufd
-            .destroy_iommu_object(self.vdevice_id)
-            .inspect_err(|e| {
-                eprintln!("Failed to destroy vDevice id {}: {}", self.vdevice_id, e);
-            })
-            .unwrap();
+        if let Err(e) = self.viommu.iommufd.destroy_iommu_object(self.vdevice_id) {
+            eprintln!("Failed to destroy vDevice id {}: {}", self.vdevice_id, e);
+        }
 
-        if let Some(s1_hwpt_id) = self.s1_hwpt_id {
-            self.viommu
-                .iommufd
-                .destroy_iommu_object(s1_hwpt_id)
-                .inspect_err(|e| {
-                    eprintln!("Failed to destroy s1_hwpt id {}: {}", s1_hwpt_id, e);
-                })
-                .unwrap();
+        if let Some(s1_hwpt_id) = self.s1_hwpt_id
+            && let Err(e) = self.viommu.iommufd.destroy_iommu_object(s1_hwpt_id)
+        {
+            eprintln!("Failed to destroy s1_hwpt id {}: {}", s1_hwpt_id, e);
         }
     }
 }
