@@ -36,6 +36,8 @@ pub enum IommufdError {
     IommuVdeviceAlloc(#[source] SysError),
     #[error("failed to allocate vEVENTQ: {0}")]
     IommuVeventqAlloc(#[source] SysError),
+    #[error("failed to allocate HW queue: {0}")]
+    IommuHwQueueAlloc(#[source] SysError),
     #[error("invalid invalidate data")]
     InvalidInvalidateData,
     #[error("failed to get HW info: {0}")]

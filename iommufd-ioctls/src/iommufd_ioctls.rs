@@ -122,6 +122,10 @@ impl IommuFd {
     pub fn alloc_iommu_veventq(&self, veventq_alloc: &mut iommu_veventq_alloc) -> Result<()> {
         iommufd_syscall::alloc_iommu_veventq(self, veventq_alloc)
     }
+
+    pub fn alloc_iommu_hw_queue(&self, hw_queue_alloc: &mut iommu_hw_queue_alloc) -> Result<()> {
+        iommufd_syscall::alloc_hw_queue(self, hw_queue_alloc)
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -313,6 +317,40 @@ impl IommufdVIommu {
         })
     }
 
+    /// Allocate a HW queue for this vIOMMU, for a vIOMMU-specific
+    /// HW-accelerated queue (e.g. a Tegra241 CMDQV VCMDQ) whose memory is
+    /// addressed by `nesting_parent_iova`/`length` in the guest physical
+    /// address space.
+    ///
+    /// # Arguments
+    /// * `queue_type` - A value of `enum iommu_hw_queue_type`
+    /// * `index` - The logical index of the HW queue per vIOMMU, per type
+    /// * `nesting_parent_iova` - Base address of the queue memory
+    /// * `length` - Length of the queue memory
+    pub fn alloc_hw_queue(
+        &self,
+        queue_type: u32,
+        index: u32,
+        nesting_parent_iova: u64,
+        length: u64,
+    ) -> Result<IommufdHwQueue> {
+        let mut hw_queue_alloc = iommu_hw_queue_alloc {
+            size: std::mem::size_of::<iommu_hw_queue_alloc>() as u32,
+            viommu_id: self.viommu_id,
+            type_: queue_type,
+            index,
+            nesting_parent_iova,
+            length,
+            ..Default::default()
+        };
+        self.iommufd.alloc_iommu_hw_queue(&mut hw_queue_alloc)?;
+
+        Ok(IommufdHwQueue {
+            iommufd: self.iommufd.clone(),
+            hw_queue_id: hw_queue_alloc.out_hw_queue_id,
+        })
+    }
+
     /// Invalidate a hwpt entry
     /// # Arguments
     /// * `cmd` - The invalidate data
@@ -426,6 +464,21 @@ impl Drop for IommufdVEventQ {
     fn drop(&mut self) {
         if let Err(e) = self.iommufd.destroy_iommu_object(self.veventq_id) {
             eprintln!("Failed to destroy vEVENTQ id {}: {}", self.veventq_id, e);
+        }
+    }
+}
+
+/// A vIOMMU-specific HW-accelerated queue (e.g. a Tegra241 CMDQV VCMDQ),
+/// backed by guest queue memory. The HW queue object is destroyed on drop.
+pub struct IommufdHwQueue {
+    pub iommufd: Arc<IommuFd>,
+    pub hw_queue_id: u32,
+}
+
+impl Drop for IommufdHwQueue {
+    fn drop(&mut self) {
+        if let Err(e) = self.iommufd.destroy_iommu_object(self.hw_queue_id) {
+            eprintln!("Failed to destroy HW queue id {}: {}", self.hw_queue_id, e);
         }
     }
 }
@@ -611,6 +664,11 @@ ioctl_io_nr!(
     IOMMUFD_TYPE as u32,
     IOMMUFD_CMD_VEVENTQ_ALLOC
 );
+ioctl_io_nr!(
+    IOMMU_HW_QUEUE_ALLOC,
+    IOMMUFD_TYPE as u32,
+    IOMMUFD_CMD_HW_QUEUE_ALLOC
+);
 
 // Safety:
 // - absolutely trust the underlying kernel
@@ -777,6 +835,23 @@ pub(crate) mod iommufd_syscall {
             Ok(())
         }
     }
+
+    pub(crate) fn alloc_hw_queue(
+        iommufd: &IommuFd,
+        hw_queue_alloc: &mut iommu_hw_queue_alloc,
+    ) -> Result<()> {
+        // SAFETY:
+        // 1. The file descriptor provided by 'iommufd' is valid and open.
+        // 2. The 'hw_queue_alloc' points to initialized memory with expected data structure,
+        // and remains valid for the duration of syscall.
+        // 3. The return value is checked.
+        let ret = unsafe { ioctl_with_mut_ref(iommufd, IOMMU_HW_QUEUE_ALLOC(), hw_queue_alloc) };
+        if ret < 0 {
+            Err(IommufdError::IommuHwQueueAlloc(SysError::last()))
+        } else {
+            Ok(())
+        }
+    }
 }
 
 #[cfg(test)]
@@ -795,5 +870,11 @@ mod tests {
         assert_eq!(IOMMU_VIOMMU_ALLOC(), 15248);
         assert_eq!(IOMMU_VDEVICE_ALLOC(), 15249);
         assert_eq!(IOMMU_VEVENTQ_ALLOC(), 15251);
+        assert_eq!(IOMMU_HW_QUEUE_ALLOC(), 0x3b94);
+    }
+
+    #[test]
+    fn test_iommu_hw_queue_alloc_size() {
+        assert_eq!(std::mem::size_of::<iommu_hw_queue_alloc>(), 40);
     }
 }

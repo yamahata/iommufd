@@ -121,6 +121,7 @@ pub const IOMMUFD_CMD_VIOMMU_ALLOC: _bindgen_ty_1 = 144;
 pub const IOMMUFD_CMD_VDEVICE_ALLOC: _bindgen_ty_1 = 145;
 pub const IOMMUFD_CMD_IOAS_CHANGE_PROCESS: _bindgen_ty_1 = 146;
 pub const IOMMUFD_CMD_VEVENTQ_ALLOC: _bindgen_ty_1 = 147;
+pub const IOMMUFD_CMD_HW_QUEUE_ALLOC: _bindgen_ty_1 = 148;
 #[doc = " DOC: General ioctl format\n\n The ioctl interface follows a general format to allow for extensibility. Each\n ioctl is passed in a structure pointer as the argument providing the size of\n the structure in the first u32. The kernel checks that any structure space\n beyond what it understands is 0. This allows userspace to use the backward\n compatible portion while consistently using the newer, larger, structures.\n\n ioctls use a standard meaning for common errnos:\n\n  - ENOTTY: The IOCTL number itself is not supported at all\n  - E2BIG: The IOCTL number is supported, but the provided structure has\n    non-zero in a part the kernel does not understand.\n  - EOPNOTSUPP: The IOCTL number is supported, and the structure is\n    understood, however a known field has a value the kernel does not\n    understand or support.\n  - EINVAL: Everything about the IOCTL was understood, but a field is not\n    correct.\n  - ENOENT: An ID or IOVA provided does not exist.\n  - ENOMEM: Out of memory.\n  - EOVERFLOW: Mathematics overflowed.\n\n As well as additional errnos, within specific ioctls."]
 pub type _bindgen_ty_1 = ::std::os::raw::c_uint;
 #[doc = " struct iommu_destroy - ioctl(IOMMU_DESTROY)\n @size: sizeof(struct iommu_destroy)\n @id: iommufd object ID to destroy. Can be any destroyable object type.\n\n Destroy any object held within iommufd."]
@@ -1010,4 +1011,42 @@ const _: () = {
         [::std::mem::offset_of!(iommu_veventq_alloc, out_veventq_fd) - 24usize];
     ["Offset of field: iommu_veventq_alloc::__reserved"]
         [::std::mem::offset_of!(iommu_veventq_alloc, __reserved) - 28usize];
+};
+pub const iommu_hw_queue_type_IOMMU_HW_QUEUE_TYPE_DEFAULT: iommu_hw_queue_type = 0;
+pub const iommu_hw_queue_type_IOMMU_HW_QUEUE_TYPE_TEGRA241_CMDQV: iommu_hw_queue_type = 1;
+#[doc = " enum iommu_hw_queue_type - HW Queue Type\n @IOMMU_HW_QUEUE_TYPE_DEFAULT: Reserved for future use\n @IOMMU_HW_QUEUE_TYPE_TEGRA241_CMDQV: NVIDIA Tegra241 CMDQV (extension for ARM\n                                      SMMUv3) Virtual Command Queue (VCMDQ)"]
+pub type iommu_hw_queue_type = ::std::os::raw::c_uint;
+#[doc = " struct iommu_hw_queue_alloc - ioctl(IOMMU_HW_QUEUE_ALLOC)\n @size: sizeof(struct iommu_hw_queue_alloc)\n @flags: Must be 0\n @viommu_id: Virtual IOMMU ID to associate the HW queue with\n @type: One of enum iommu_hw_queue_type\n @index: The logical index to the HW queue per virtual IOMMU for a multi-queue\n         model\n @out_hw_queue_id: The ID of the new HW queue\n @nesting_parent_iova: Base address of the queue memory in the guest physical\n                       address space\n @length: Length of the queue memory\n\n Allocate a HW queue object for a vIOMMU-specific HW-accelerated queue, which\n allows HW to access a guest queue memory described using @nesting_parent_iova\n and @length.\n\n A vIOMMU can allocate multiple queues, but it must use a different @index per\n type to separate each allocation, e.g::\n\n     Type1 HW queue0, Type1 HW queue1, Type2 HW queue0, ..."]
+#[repr(C)]
+#[derive(Debug, Default, Copy, Clone, PartialEq)]
+pub struct iommu_hw_queue_alloc {
+    pub size: __u32,
+    pub flags: __u32,
+    pub viommu_id: __u32,
+    pub type_: __u32,
+    pub index: __u32,
+    pub out_hw_queue_id: __u32,
+    pub nesting_parent_iova: __u64,
+    pub length: __u64,
+}
+#[allow(clippy::unnecessary_operation, clippy::identity_op)]
+const _: () = {
+    ["Size of iommu_hw_queue_alloc"][::std::mem::size_of::<iommu_hw_queue_alloc>() - 40usize];
+    ["Alignment of iommu_hw_queue_alloc"][::std::mem::align_of::<iommu_hw_queue_alloc>() - 8usize];
+    ["Offset of field: iommu_hw_queue_alloc::size"]
+        [::std::mem::offset_of!(iommu_hw_queue_alloc, size) - 0usize];
+    ["Offset of field: iommu_hw_queue_alloc::flags"]
+        [::std::mem::offset_of!(iommu_hw_queue_alloc, flags) - 4usize];
+    ["Offset of field: iommu_hw_queue_alloc::viommu_id"]
+        [::std::mem::offset_of!(iommu_hw_queue_alloc, viommu_id) - 8usize];
+    ["Offset of field: iommu_hw_queue_alloc::type_"]
+        [::std::mem::offset_of!(iommu_hw_queue_alloc, type_) - 12usize];
+    ["Offset of field: iommu_hw_queue_alloc::index"]
+        [::std::mem::offset_of!(iommu_hw_queue_alloc, index) - 16usize];
+    ["Offset of field: iommu_hw_queue_alloc::out_hw_queue_id"]
+        [::std::mem::offset_of!(iommu_hw_queue_alloc, out_hw_queue_id) - 20usize];
+    ["Offset of field: iommu_hw_queue_alloc::nesting_parent_iova"]
+        [::std::mem::offset_of!(iommu_hw_queue_alloc, nesting_parent_iova) - 24usize];
+    ["Offset of field: iommu_hw_queue_alloc::length"]
+        [::std::mem::offset_of!(iommu_hw_queue_alloc, length) - 32usize];
 };
