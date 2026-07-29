@@ -555,26 +555,84 @@ const _: () = {
     ["Offset of field: iommu_hw_info_arm_smmuv3::aidr"]
         [::std::mem::offset_of!(iommu_hw_info_arm_smmuv3, aidr) - 36usize];
 };
+#[doc = " struct iommu_hw_info_tegra241_cmdqv - NVIDIA Tegra241 CMDQV Hardware\n         Information (IOMMU_HW_INFO_TYPE_TEGRA241_CMDQV)\n\n @flags: Must be 0\n @version: Version number for the CMDQ-V HW for PARAM bits[03:00]\n @log2vcmdqs: Log2 of the total number of VCMDQs for PARAM bits[07:04]\n @log2vsids: Log2 of the total number of SID replacements for PARAM bits[15:12]\n @__reserved: Must be 0\n\n VMM can use these fields directly in its emulated global PARAM register. Note\n that only one Virtual Interface (VINTF) should be exposed to a VM, i.e. PARAM\n bits[11:08] should be set to 0 for log2 of the total number of VINTFs."]
+#[repr(C)]
+#[derive(Debug, Default, Copy, Clone, PartialEq)]
+pub struct iommu_hw_info_tegra241_cmdqv {
+    pub flags: __u32,
+    pub version: __u8,
+    pub log2vcmdqs: __u8,
+    pub log2vsids: __u8,
+    pub __reserved: __u8,
+}
+#[allow(clippy::unnecessary_operation, clippy::identity_op)]
+const _: () = {
+    ["Size of iommu_hw_info_tegra241_cmdqv"]
+        [::std::mem::size_of::<iommu_hw_info_tegra241_cmdqv>() - 8usize];
+    ["Alignment of iommu_hw_info_tegra241_cmdqv"]
+        [::std::mem::align_of::<iommu_hw_info_tegra241_cmdqv>() - 4usize];
+    ["Offset of field: iommu_hw_info_tegra241_cmdqv::flags"]
+        [::std::mem::offset_of!(iommu_hw_info_tegra241_cmdqv, flags) - 0usize];
+    ["Offset of field: iommu_hw_info_tegra241_cmdqv::version"]
+        [::std::mem::offset_of!(iommu_hw_info_tegra241_cmdqv, version) - 4usize];
+    ["Offset of field: iommu_hw_info_tegra241_cmdqv::log2vcmdqs"]
+        [::std::mem::offset_of!(iommu_hw_info_tegra241_cmdqv, log2vcmdqs) - 5usize];
+    ["Offset of field: iommu_hw_info_tegra241_cmdqv::log2vsids"]
+        [::std::mem::offset_of!(iommu_hw_info_tegra241_cmdqv, log2vsids) - 6usize];
+    ["Offset of field: iommu_hw_info_tegra241_cmdqv::__reserved"]
+        [::std::mem::offset_of!(iommu_hw_info_tegra241_cmdqv, __reserved) - 7usize];
+};
 pub const iommu_hw_info_type_IOMMU_HW_INFO_TYPE_NONE: iommu_hw_info_type = 0;
 pub const iommu_hw_info_type_IOMMU_HW_INFO_TYPE_INTEL_VTD: iommu_hw_info_type = 1;
 pub const iommu_hw_info_type_IOMMU_HW_INFO_TYPE_ARM_SMMUV3: iommu_hw_info_type = 2;
-#[doc = " enum iommu_hw_info_type - IOMMU Hardware Info Types\n @IOMMU_HW_INFO_TYPE_NONE: Used by the drivers that do not report hardware\n                           info\n @IOMMU_HW_INFO_TYPE_INTEL_VTD: Intel VT-d iommu info type\n @IOMMU_HW_INFO_TYPE_ARM_SMMUV3: ARM SMMUv3 iommu info type"]
+pub const iommu_hw_info_type_IOMMU_HW_INFO_TYPE_TEGRA241_CMDQV: iommu_hw_info_type = 3;
+#[doc = " enum iommu_hw_info_type - IOMMU Hardware Info Types\n @IOMMU_HW_INFO_TYPE_NONE: Used by the drivers that do not report hardware\n                           info\n @IOMMU_HW_INFO_TYPE_INTEL_VTD: Intel VT-d iommu info type\n @IOMMU_HW_INFO_TYPE_ARM_SMMUV3: ARM SMMUv3 iommu info type\n @IOMMU_HW_INFO_TYPE_TEGRA241_CMDQV: NVIDIA Tegra241 CMDQV (extension for ARM\n                                     SMMUv3) info type"]
 pub type iommu_hw_info_type = ::std::os::raw::c_uint;
 pub const iommufd_hw_capabilities_IOMMU_HW_CAP_DIRTY_TRACKING: iommufd_hw_capabilities = 1;
 pub const iommufd_hw_capabilities_IOMMU_HW_CAP_PCI_PASID_EXEC: iommufd_hw_capabilities = 2;
 pub const iommufd_hw_capabilities_IOMMU_HW_CAP_PCI_PASID_PRIV: iommufd_hw_capabilities = 4;
 #[doc = " enum iommufd_hw_capabilities\n @IOMMU_HW_CAP_DIRTY_TRACKING: IOMMU hardware support for dirty tracking\n                               If available, it means the following APIs\n                               are supported:\n\n                                   IOMMU_HWPT_GET_DIRTY_BITMAP\n                                   IOMMU_HWPT_SET_DIRTY_TRACKING\n\n @IOMMU_HW_CAP_PCI_PASID_EXEC: Execute Permission Supported, user ignores it\n                               when the struct\n                               iommu_hw_info::out_max_pasid_log2 is zero.\n @IOMMU_HW_CAP_PCI_PASID_PRIV: Privileged Mode Supported, user ignores it\n                               when the struct\n                               iommu_hw_info::out_max_pasid_log2 is zero."]
 pub type iommufd_hw_capabilities = ::std::os::raw::c_uint;
-#[doc = " struct iommu_hw_info - ioctl(IOMMU_GET_HW_INFO)\n @size: sizeof(struct iommu_hw_info)\n @flags: Must be 0\n @dev_id: The device bound to the iommufd\n @data_len: Input the length of a user buffer in bytes. Output the length of\n            data that kernel supports\n @data_uptr: User pointer to a user-space buffer used by the kernel to fill\n             the iommu type specific hardware information data\n @out_data_type: Output the iommu hardware info type as defined in the enum\n                 iommu_hw_info_type.\n @out_capabilities: Output the generic iommu capability info type as defined\n                    in the enum iommu_hw_capabilities.\n @out_max_pasid_log2: Output the width of PASIDs. 0 means no PASID support.\n                      PCI devices turn to out_capabilities to check if the\n                      specific capabilities is supported or not.\n @__reserved: Must be 0\n\n Query an iommu type specific hardware information data from an iommu behind\n a given device that has been bound to iommufd. This hardware info data will\n be used to sync capabilities between the virtual iommu and the physical\n iommu, e.g. a nested translation setup needs to check the hardware info, so\n a guest stage-1 page table can be compatible with the physical iommu.\n\n To capture an iommu type specific hardware information data, @data_uptr and\n its length @data_len must be provided. Trailing bytes will be zeroed if the\n user buffer is larger than the data that kernel has. Otherwise, kernel only\n fills the buffer using the given length in @data_len. If the ioctl succeeds,\n @data_len will be updated to the length that kernel actually supports,\n @out_data_type will be filled to decode the data filled in the buffer\n pointed by @data_uptr. Input @data_len == zero is allowed."]
+pub const iommufd_hw_info_flags_IOMMU_HW_INFO_FLAG_INPUT_TYPE: iommufd_hw_info_flags = 1;
+#[doc = " enum iommufd_hw_info_flags - Flags for iommu_hw_info\n @IOMMU_HW_INFO_FLAG_INPUT_TYPE: If set, @in_data_type carries an input type\n                                 for user space to request for a specific info"]
+pub type iommufd_hw_info_flags = ::std::os::raw::c_uint;
 #[repr(C)]
-#[derive(Debug, Default, Copy, Clone, PartialEq)]
+#[derive(Copy, Clone)]
+pub union iommu_hw_info__bindgen_ty_1 {
+    pub in_data_type: __u32,
+    pub out_data_type: __u32,
+}
+#[allow(clippy::unnecessary_operation, clippy::identity_op)]
+const _: () = {
+    ["Size of iommu_hw_info__bindgen_ty_1"]
+        [::std::mem::size_of::<iommu_hw_info__bindgen_ty_1>() - 4usize];
+    ["Alignment of iommu_hw_info__bindgen_ty_1"]
+        [::std::mem::align_of::<iommu_hw_info__bindgen_ty_1>() - 4usize];
+    ["Offset of field: iommu_hw_info__bindgen_ty_1::in_data_type"]
+        [::std::mem::offset_of!(iommu_hw_info__bindgen_ty_1, in_data_type) - 0usize];
+    ["Offset of field: iommu_hw_info__bindgen_ty_1::out_data_type"]
+        [::std::mem::offset_of!(iommu_hw_info__bindgen_ty_1, out_data_type) - 0usize];
+};
+impl ::std::fmt::Debug for iommu_hw_info__bindgen_ty_1 {
+    fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+        write!(f, "iommu_hw_info__bindgen_ty_1 {{ union }}")
+    }
+}
+impl ::std::default::Default for iommu_hw_info__bindgen_ty_1 {
+    fn default() -> Self {
+        unsafe { ::std::mem::zeroed() }
+    }
+}
+#[doc = " struct iommu_hw_info - ioctl(IOMMU_GET_HW_INFO)\n @size: sizeof(struct iommu_hw_info)\n @flags: Must be 0\n @dev_id: The device bound to the iommufd\n @data_len: Input the length of a user buffer in bytes. Output the length of\n            data that kernel supports\n @data_uptr: User pointer to a user-space buffer used by the kernel to fill\n             the iommu type specific hardware information data\n @in_data_type: This shares the same field with @out_data_type, making it be\n                a bidirectional field. When IOMMU_HW_INFO_FLAG_INPUT_TYPE is\n                set, an input type carried via this @in_data_type field will\n                be valid, requesting for the info data to the given type. If\n                IOMMU_HW_INFO_FLAG_INPUT_TYPE is unset, any input value will\n                be seen as IOMMU_HW_INFO_TYPE_DEFAULT\n @out_data_type: Output the iommu hardware info type as defined in the enum\n                 iommu_hw_info_type.\n @out_capabilities: Output the generic iommu capability info type as defined\n                    in the enum iommu_hw_capabilities.\n @out_max_pasid_log2: Output the width of PASIDs. 0 means no PASID support.\n                      PCI devices turn to out_capabilities to check if the\n                      specific capabilities is supported or not.\n @__reserved: Must be 0\n\n Query an iommu type specific hardware information data from an iommu behind\n a given device that has been bound to iommufd. This hardware info data will\n be used to sync capabilities between the virtual iommu and the physical\n iommu, e.g. a nested translation setup needs to check the hardware info, so\n a guest stage-1 page table can be compatible with the physical iommu.\n\n To capture an iommu type specific hardware information data, @data_uptr and\n its length @data_len must be provided. Trailing bytes will be zeroed if the\n user buffer is larger than the data that kernel has. Otherwise, kernel only\n fills the buffer using the given length in @data_len. If the ioctl succeeds,\n @data_len will be updated to the length that kernel actually supports,\n @out_data_type will be filled to decode the data filled in the buffer\n pointed by @data_uptr. Input @data_len == zero is allowed."]
+#[repr(C)]
+#[derive(Debug, Default, Copy, Clone)]
 pub struct iommu_hw_info {
     pub size: __u32,
     pub flags: __u32,
     pub dev_id: __u32,
     pub data_len: __u32,
     pub data_uptr: __u64,
-    pub out_data_type: __u32,
+    pub __bindgen_anon_1: iommu_hw_info__bindgen_ty_1,
     pub out_max_pasid_log2: __u8,
     pub __reserved: [__u8; 3usize],
     pub out_capabilities: __u64,
@@ -592,8 +650,8 @@ const _: () = {
         [::std::mem::offset_of!(iommu_hw_info, data_len) - 12usize];
     ["Offset of field: iommu_hw_info::data_uptr"]
         [::std::mem::offset_of!(iommu_hw_info, data_uptr) - 16usize];
-    ["Offset of field: iommu_hw_info::out_data_type"]
-        [::std::mem::offset_of!(iommu_hw_info, out_data_type) - 24usize];
+    ["Offset of field: iommu_hw_info::__bindgen_anon_1"]
+        [::std::mem::offset_of!(iommu_hw_info, __bindgen_anon_1) - 24usize];
     ["Offset of field: iommu_hw_info::out_max_pasid_log2"]
         [::std::mem::offset_of!(iommu_hw_info, out_max_pasid_log2) - 28usize];
     ["Offset of field: iommu_hw_info::__reserved"]
@@ -601,6 +659,33 @@ const _: () = {
     ["Offset of field: iommu_hw_info::out_capabilities"]
         [::std::mem::offset_of!(iommu_hw_info, out_capabilities) - 32usize];
 };
+impl iommu_hw_info {
+    /// Read the `out_data_type`/`in_data_type` union member without
+    /// requiring callers to write `unsafe` for a plain data read.
+    pub fn out_data_type(&self) -> u32 {
+        // SAFETY: `iommu_hw_info__bindgen_ty_1` is a union of
+        // `in_data_type` and `out_data_type`, both plain `__u32` values at
+        // the same offset. Reading either member is always defined
+        // regardless of which one was last written.
+        unsafe { self.__bindgen_anon_1.out_data_type }
+    }
+
+    /// Set the `in_data_type`/`out_data_type` union member. Combine with
+    /// `IOMMU_HW_INFO_FLAG_INPUT_TYPE` in `flags` to request a specific
+    /// hw-info type from the kernel.
+    pub fn set_in_data_type(&mut self, t: u32) {
+        self.__bindgen_anon_1 = iommu_hw_info__bindgen_ty_1 { in_data_type: t };
+    }
+}
+#[cfg(test)]
+mod iommu_hw_info_tests {
+    use super::*;
+
+    #[test]
+    fn test_iommu_hw_info_out_data_type_default() {
+        assert_eq!(iommu_hw_info::default().out_data_type(), 0);
+    }
+}
 pub const iommufd_hwpt_set_dirty_tracking_flags_IOMMU_HWPT_DIRTY_TRACKING_ENABLE:
     iommufd_hwpt_set_dirty_tracking_flags = 1;
 pub type iommufd_hwpt_set_dirty_tracking_flags = ::std::os::raw::c_uint;
@@ -1016,7 +1101,7 @@ pub const iommu_hw_queue_type_IOMMU_HW_QUEUE_TYPE_DEFAULT: iommu_hw_queue_type =
 pub const iommu_hw_queue_type_IOMMU_HW_QUEUE_TYPE_TEGRA241_CMDQV: iommu_hw_queue_type = 1;
 #[doc = " enum iommu_hw_queue_type - HW Queue Type\n @IOMMU_HW_QUEUE_TYPE_DEFAULT: Reserved for future use\n @IOMMU_HW_QUEUE_TYPE_TEGRA241_CMDQV: NVIDIA Tegra241 CMDQV (extension for ARM\n                                      SMMUv3) Virtual Command Queue (VCMDQ)"]
 pub type iommu_hw_queue_type = ::std::os::raw::c_uint;
-#[doc = " struct iommu_hw_queue_alloc - ioctl(IOMMU_HW_QUEUE_ALLOC)\n @size: sizeof(struct iommu_hw_queue_alloc)\n @flags: Must be 0\n @viommu_id: Virtual IOMMU ID to associate the HW queue with\n @type: One of enum iommu_hw_queue_type\n @index: The logical index to the HW queue per virtual IOMMU for a multi-queue\n         model\n @out_hw_queue_id: The ID of the new HW queue\n @nesting_parent_iova: Base address of the queue memory in the guest physical\n                       address space\n @length: Length of the queue memory\n\n Allocate a HW queue object for a vIOMMU-specific HW-accelerated queue, which\n allows HW to access a guest queue memory described using @nesting_parent_iova\n and @length.\n\n A vIOMMU can allocate multiple queues, but it must use a different @index per\n type to separate each allocation, e.g::\n\n     Type1 HW queue0, Type1 HW queue1, Type2 HW queue0, ..."]
+#[doc = " struct iommu_hw_queue_alloc - ioctl(IOMMU_HW_QUEUE_ALLOC)\n @size: sizeof(struct iommu_hw_queue_alloc)\n @flags: Must be 0\n @viommu_id: Virtual IOMMU ID to associate the HW queue with\n @type: One of enum iommu_hw_queue_type\n @index: The logical index to the HW queue per virtual IOMMU for a multi-queue\n         model\n @out_hw_queue_id: The ID of the new HW queue\n @nesting_parent_iova: Base address of the queue memory in the guest physical\n                       address space\n @length: Length of the queue memory\n\n Allocate a HW queue object for a vIOMMU-specific HW-accelerated queue, which\n allows HW to access a guest queue memory described using @nesting_parent_iova\n and @length.\n\n A vIOMMU can allocate multiple queues, but it must use a different @index per\n type to separate each allocation, e.g. Type1 HW queue0, Type1 HW queue1,\n Type2 HW queue0, ..."]
 #[repr(C)]
 #[derive(Debug, Default, Copy, Clone, PartialEq)]
 pub struct iommu_hw_queue_alloc {

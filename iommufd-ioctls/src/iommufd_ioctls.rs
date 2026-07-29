@@ -150,6 +150,10 @@ pub struct IommufdVIommu {
     pub s2_hwpt_id: u32,
     pub bypass_hwpt_id: Option<u32>,
     pub abort_hwpt_id: Option<u32>,
+    /// Driver data returned by the kernel on a Tegra241 CMDQV vIOMMU
+    /// allocation (e.g. the VINTF page0 mmap coordinates). `None` for
+    /// non-CMDQV vIOMMU types.
+    pub cmdqv_data: Option<iommu_viommu_tegra241_cmdqv>,
 }
 
 impl IommufdVIommu {
@@ -232,6 +236,10 @@ impl IommufdVIommu {
             .alloc_iommu_hwpt(&mut abort_iommufd_hwpt_alloc)?;
         viommu.abort_hwpt_id = Some(abort_iommufd_hwpt_alloc.out_hwpt_id);
 
+        if viommu_type == IOMMU_VIOMMU_TYPE_TEGRA241_CMDQV {
+            viommu.cmdqv_data = Some(cmdqv_data);
+        }
+
         Ok(viommu)
     }
 
@@ -288,7 +296,22 @@ impl IommufdVIommu {
             s2_hwpt_id,
             bypass_hwpt_id: None,
             abort_hwpt_id: None,
+            cmdqv_data: None,
         })
+    }
+
+    /// The VINTF page0 mmap coordinates `(offset, length)` for a
+    /// Tegra241 CMDQV vIOMMU, as returned by the kernel on allocation.
+    /// The offset is a BYTE offset to pass directly as mmap()'s offset
+    /// argument, not a page number.
+    ///
+    /// Returns `None` if this vIOMMU is not a CMDQV vIOMMU, AND also if
+    /// it is a CMDQV vIOMMU that was constructed directly via
+    /// `new_with_type()` rather than `new()` - `cmdqv_data` is only
+    /// populated by `new()`.
+    pub fn vintf_page0(&self) -> Option<(u64, u64)> {
+        self.cmdqv_data
+            .map(|d| (d.out_vintf_page0_pgoff, d.out_vintf_page0_pgsz))
     }
 
     /// Allocate a virtual event queue for this vIOMMU.
@@ -438,6 +461,7 @@ impl Drop for IommufdVIommu {
 pub enum IommufdHwInfoData {
     Smmuv3(iommu_hw_info_arm_smmuv3),
     Vtd(iommu_hw_info_vtd),
+    Tegra241Cmdqv(iommu_hw_info_tegra241_cmdqv),
 }
 
 #[derive(Debug, Clone)]
@@ -594,6 +618,17 @@ impl IommufdVDevice {
             IommufdHwInfoData::Vtd(_) => {
                 unimplemented!()
             }
+            IommufdHwInfoData::Tegra241Cmdqv(data) => iommu_hw_info {
+                size: std::mem::size_of::<iommu_hw_info>() as u32,
+                flags: iommufd_hw_info_flags_IOMMU_HW_INFO_FLAG_INPUT_TYPE,
+                dev_id: self.dev_id,
+                data_len: std::mem::size_of::<iommu_hw_info_tegra241_cmdqv>() as u32,
+                data_uptr: data as *mut _ as u64,
+                __bindgen_anon_1: iommu_hw_info__bindgen_ty_1 {
+                    in_data_type: iommu_hw_info_type_IOMMU_HW_INFO_TYPE_TEGRA241_CMDQV,
+                },
+                ..Default::default()
+            },
         };
 
         self.viommu.iommufd.get_hw_info(&mut hw_info)?;
@@ -876,5 +911,15 @@ mod tests {
     #[test]
     fn test_iommu_hw_queue_alloc_size() {
         assert_eq!(std::mem::size_of::<iommu_hw_queue_alloc>(), 40);
+    }
+
+    #[test]
+    fn test_iommu_hw_info_tegra241_cmdqv_size() {
+        assert_eq!(std::mem::size_of::<iommu_hw_info_tegra241_cmdqv>(), 8);
+    }
+
+    #[test]
+    fn test_iommu_hw_info_type_tegra241_cmdqv() {
+        assert_eq!(iommu_hw_info_type_IOMMU_HW_INFO_TYPE_TEGRA241_CMDQV, 3);
     }
 }
