@@ -195,12 +195,12 @@ impl IommufdVIommu {
         // Allocate the bypass s1_hwpt used while the virtual IOMMU is not
         // yet initialized by the guest, and the abort s1_hwpt used when
         // the guest configures a stream for abort.
-        // For CMDQV, use viommu_id as pt_id instead of s2_hwpt_id.
-        let s1_pt_id = if viommu_type == IOMMU_VIOMMU_TYPE_TEGRA241_CMDQV {
-            viommu.viommu_id
-        } else {
-            viommu.s2_hwpt_id
-        };
+        // The parent must be the vIOMMU, not the S2 nesting-parent HWPT:
+        // mainline arm-smmu-v3 only implements nested-domain allocation
+        // as a vIOMMU op (hw_pagetable.c rejects an hwpt-parented nested
+        // alloc with EOPNOTSUPP when the driver lacks the device-level
+        // op). This also matches QEMU's allocation order.
+        let s1_pt_id = viommu.viommu_id;
 
         let bypass_s1_hwpt_data = iommu_hwpt_arm_smmuv3 {
             ste: [SMMU_STE_CFG_BYPASS | SMMU_STE_VALID, 0x0],
