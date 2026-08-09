@@ -4,6 +4,7 @@
 //
 
 use std::fs::{self, File, OpenOptions};
+use std::mem::ManuallyDrop;
 use std::os::unix::io::{AsRawFd, FromRawFd, RawFd};
 use std::path::Path;
 use std::sync::Arc;
@@ -336,7 +337,7 @@ impl IommufdVIommu {
         Ok(IommufdVEventQ {
             iommufd: self.iommufd.clone(),
             veventq_id: veventq_alloc.out_veventq_id,
-            fd,
+            fd: ManuallyDrop::new(fd),
         })
     }
 
@@ -478,14 +479,40 @@ pub enum IommufdHwptData {
 
 /// A virtual event queue tied to a vIOMMU. Events are read from `fd`;
 /// the queue object is destroyed on drop.
+///
+/// `fd` is `ManuallyDrop` (transparent `Deref`/`DerefMut` to `File`,
+/// so callers read/`try_clone()` it exactly as before) because
+/// `iommufd_eventq_init` (kernel `drivers/iommu/iommufd/eventq.c`)
+/// makes the struct file backing it hold an extra reference on the
+/// vEVENTQ object: `IOMMU_DESTROY` always fails `EBUSY`
+/// (`refcount_dec_if_one`) while ANY fd on that struct file - this
+/// one included - is still open, even one about to be dropped in the
+/// same function. `Drop` below closes `fd` first for exactly that
+/// reason. This does NOT cover clones: a caller that duplicated `fd`
+/// (e.g. `fd.try_clone()`) must close every clone before dropping (or
+/// otherwise triggering the destroy of) this object, or the destroy
+/// ioctl still fails EBUSY and leaks the vEVENTQ - and, since it
+/// holds a reference to its parent, the vIOMMU too - until the whole
+/// iommufd context closes.
 pub struct IommufdVEventQ {
     pub iommufd: Arc<IommuFd>,
     pub veventq_id: u32,
-    pub fd: File,
+    pub fd: ManuallyDrop<File>,
 }
 
 impl Drop for IommufdVEventQ {
     fn drop(&mut self) {
+        // Close our own fd BEFORE asking the kernel to destroy the
+        // object - see the struct's doc comment for why this order
+        // is required (EBUSY otherwise).
+        //
+        // SAFETY: `self.fd` is a `ManuallyDrop` precisely so normal
+        // drop glue never touches it; this `take` is the only one
+        // that ever runs for a given `IommufdVEventQ` (Drop::drop
+        // runs at most once), and nothing reads `self.fd` afterward.
+        let fd = unsafe { ManuallyDrop::take(&mut self.fd) };
+        drop(fd);
+
         if let Err(e) = self.iommufd.destroy_iommu_object(self.veventq_id) {
             eprintln!("Failed to destroy vEVENTQ id {}: {}", self.veventq_id, e);
         }
