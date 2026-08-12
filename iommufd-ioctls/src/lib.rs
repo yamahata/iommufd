@@ -14,6 +14,8 @@ pub mod iommufd_ioctls;
 
 pub use iommufd_ioctls::*;
 
+use iommufd_bindings::iommufd::*;
+
 #[derive(Debug, Error)]
 pub enum IommufdError {
     #[error("failed to open /dev/iommufd: {0}")]
@@ -36,6 +38,16 @@ pub enum IommufdError {
     IommuGetHwInfo(#[source] SysError),
     #[error("failed to invalidate HWPT: {0}")]
     IommuHwptInvalidate(#[source] SysError),
+    #[error("the host reported an unknown IOMMU: {0}")]
+    UnknownIommu(iommu_hw_info_type),
+    #[error("the data does not match the backing IOMMU: {0:?}")]
+    IommuTypeMismatch(IommuKind),
+    #[error("S1 HWPT already allocated with for the given vDevice: {0}")]
+    S1HwptAlreadyAllocated(u32),
+    #[error("Intel VT-d is not supported")]
+    VtdUnsupported,
+    #[error("AMD IOMMU is not supported")]
+    AmdUnsupported,
 }
 
 pub type Result<T> = std::result::Result<T, IommufdError>;
