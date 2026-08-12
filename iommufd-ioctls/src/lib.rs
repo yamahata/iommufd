@@ -52,6 +52,8 @@ pub enum IommufdError {
     VtdUnsupported,
     #[error("AMD IOMMU is not supported")]
     AmdUnsupported,
+    #[error("failed to attach the device to a page table: {0}")]
+    AttachHwpt(#[source] io::Error),
 }
 
 pub type Result<T> = std::result::Result<T, IommufdError>;
