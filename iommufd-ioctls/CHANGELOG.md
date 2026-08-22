@@ -1,6 +1,8 @@
 ## Upcoming release
 
 ## Changed
+- Report destroy failures in `Drop` through the `log` crate instead of
+  writing to stderr with `eprintln!`.
 
 ## Added
 

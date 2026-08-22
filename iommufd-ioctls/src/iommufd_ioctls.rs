@@ -441,7 +441,7 @@ pub struct IommufdHwQueue {
 impl Drop for IommufdHwQueue {
     fn drop(&mut self) {
         if let Err(e) = self.viommu.iommufd.destroy_iommu_object(self.hw_queue_id) {
-            eprintln!("Failed to destroy HW queue id {}: {e}", self.hw_queue_id);
+            log::error!("Failed to destroy HW queue id {}: {e}", self.hw_queue_id);
         }
     }
 }
@@ -456,7 +456,7 @@ impl Drop for IommufdVIommu {
         ] {
             let Some(id) = id else { continue };
             if let Err(e) = self.iommufd.destroy_iommu_object(id) {
-                eprintln!("Failed to destroy {what} id {id}: {e}");
+                log::error!("Failed to destroy {what} id {id}: {e}");
             }
         }
     }
@@ -581,7 +581,7 @@ impl Drop for IommufdVEventQ {
         unsafe { ManuallyDrop::drop(&mut self.file) };
 
         if let Err(e) = self.viommu.iommufd.destroy_iommu_object(self.veventq_id) {
-            eprintln!("Failed to destroy vEVENTQ id {}: {e}", self.veventq_id);
+            log::error!("Failed to destroy vEVENTQ id {}: {e}", self.veventq_id);
         }
     }
 }
@@ -699,11 +699,11 @@ impl Drop for IommufdVDevice {
         if let Some(s1_hwpt_id) = self.s1_hwpt_id
             && let Err(e) = self.viommu.iommufd.destroy_iommu_object(s1_hwpt_id)
         {
-            eprintln!("Failed to destroy s1_hwpt id {s1_hwpt_id}: {e}");
+            log::error!("Failed to destroy s1_hwpt id {s1_hwpt_id}: {e}");
         }
 
         if let Err(e) = self.viommu.iommufd.destroy_iommu_object(self.vdevice_id) {
-            eprintln!("Failed to destroy vDevice id {}: {e}", self.vdevice_id);
+            log::error!("Failed to destroy vDevice id {}: {e}", self.vdevice_id);
         }
     }
 }
