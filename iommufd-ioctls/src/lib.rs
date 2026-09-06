@@ -52,6 +52,10 @@ pub enum IommufdError {
     UnsupportedS1HwptDataType(iommu_hwpt_data_type),
     #[error("S1 HWPT already allocated with for the given vDevice: {0}")]
     S1HwptAlreadyAllocated(u32),
+    #[error("an S1 HWPT is already staged for the given vDevice: {0}")]
+    S1HwptAlreadyStaged(u32),
+    #[error("no S1 HWPT is staged for the given vDevice: {0}")]
+    S1HwptNotStaged(u32),
 }
 
 pub type Result<T> = std::result::Result<T, IommufdError>;

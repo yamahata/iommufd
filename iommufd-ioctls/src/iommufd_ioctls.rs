@@ -564,7 +564,15 @@ pub struct IommufdVDevice {
     pub dev_id: u32,
     pub virt_id: u64,
     pub vdevice_id: u32,
+    /// The installed stage-1 HWPT: the one the caller has attached the
+    /// device to (or is about to attach it to, on a fresh install).
     pub s1_hwpt_id: Option<u32>,
+    /// A second stage-1 HWPT allocated by `stage_s1_hwpt` while
+    /// `s1_hwpt_id` stays installed, so a caller can replace a live
+    /// stage-1 in one attach instead of parking the device on another
+    /// HWPT first. Promoted by `commit_staged_s1_hwpt`, released by
+    /// `discard_staged_s1_hwpt`; at most one may be pending.
+    pub staged_s1_hwpt_id: Option<u32>,
 }
 
 impl IommufdVDevice {
@@ -589,62 +597,124 @@ impl IommufdVDevice {
             virt_id,
             vdevice_id: vdevice_alloc.out_vdevice_id,
             s1_hwpt_id: None,
+            staged_s1_hwpt_id: None,
         })
     }
 
-    /// Allocate s1 hwpt for the vDevice
+    /// Issue `IOMMU_HWPT_ALLOC` for a nested stage-1 HWPT parented on the
+    /// vIOMMU and return the new object id. Touches no bookkeeping: the
+    /// caller decides whether the id becomes the installed or the staged
+    /// stage-1.
+    fn alloc_s1_hwpt_object(&self, hwpt_data: &IommufdHwptData) -> Result<u32> {
+        let mut s1_iommufd_hwpt_alloc = match hwpt_data {
+            IommufdHwptData::Smmuv3(data) => iommu_hwpt_alloc {
+                size: std::mem::size_of::<iommu_hwpt_alloc>() as u32,
+                dev_id: self.dev_id,
+                pt_id: self.viommu.viommu_id,
+                data_type: iommu_hwpt_data_type_IOMMU_HWPT_DATA_ARM_SMMUV3,
+                data_len: std::mem::size_of::<iommu_hwpt_arm_smmuv3>() as u32,
+                data_uptr: data as *const iommu_hwpt_arm_smmuv3 as u64,
+                ..Default::default()
+            },
+            IommufdHwptData::Vtd(_) => unimplemented!(),
+            IommufdHwptData::Raw { data_type, data } => iommu_hwpt_alloc {
+                size: std::mem::size_of::<iommu_hwpt_alloc>() as u32,
+                dev_id: self.dev_id,
+                pt_id: self.viommu.viommu_id,
+                data_type: *data_type,
+                data_len: data.len() as u32,
+                data_uptr: data.as_ptr() as u64,
+                ..Default::default()
+            },
+        };
+        self.viommu
+            .iommufd
+            .alloc_iommu_hwpt(&mut s1_iommufd_hwpt_alloc)?;
+        Ok(s1_iommufd_hwpt_alloc.out_hwpt_id)
+    }
+
+    /// Allocate the stage-1 HWPT for a vDevice that has none installed.
+    ///
+    /// Equivalent to `stage_s1_hwpt` followed by `commit_staged_s1_hwpt`
+    /// with nothing to destroy; fails with `S1HwptAlreadyAllocated` when a
+    /// stage-1 is already installed (use `stage_s1_hwpt` to replace it) and
+    /// with `S1HwptAlreadyStaged` when a staged one is pending.
     pub fn allocate_s1_hwpt(&mut self, hwpt_data: &IommufdHwptData) -> Result<u32> {
         if self.s1_hwpt_id.is_some() {
             return Err(IommufdError::S1HwptAlreadyAllocated(self.vdevice_id));
         }
+        let s1_hwpt_id = self.stage_s1_hwpt(hwpt_data)?;
+        // Nothing is installed, so this is the promotion alone and cannot
+        // fail: the only fallible step of a commit is destroying the old
+        // stage-1.
+        self.commit_staged_s1_hwpt()?;
+        Ok(s1_hwpt_id)
+    }
 
-        match hwpt_data {
-            IommufdHwptData::Smmuv3(data) => {
-                let mut s1_iommufd_hwpt_alloc = iommu_hwpt_alloc {
-                    size: std::mem::size_of::<iommu_hwpt_alloc>() as u32,
-                    dev_id: self.dev_id,
-                    pt_id: self.viommu.viommu_id,
-                    data_type: iommu_hwpt_data_type_IOMMU_HWPT_DATA_ARM_SMMUV3,
-                    data_len: std::mem::size_of::<iommu_hwpt_arm_smmuv3>() as u32,
-                    data_uptr: data as *const iommu_hwpt_arm_smmuv3 as u64,
-                    ..Default::default()
-                };
-                let result = self
-                    .viommu
-                    .iommufd
-                    .alloc_iommu_hwpt(&mut s1_iommufd_hwpt_alloc);
+    /// Allocate a second stage-1 HWPT without disturbing the installed one.
+    ///
+    /// This is the first half of an atomic stage-1 replacement: the caller
+    /// attaches the device to the returned id (the kernel services that as
+    /// `iommufd_device_replace`, so the device is never without a
+    /// translation), then calls `commit_staged_s1_hwpt` on success or
+    /// `discard_staged_s1_hwpt` on failure. While a stage is pending the
+    /// installed stage-1, if any, is untouched and stays attached. At most
+    /// one stage may be pending: a second call fails with
+    /// `S1HwptAlreadyStaged` before any ioctl is issued.
+    pub fn stage_s1_hwpt(&mut self, hwpt_data: &IommufdHwptData) -> Result<u32> {
+        if self.staged_s1_hwpt_id.is_some() {
+            return Err(IommufdError::S1HwptAlreadyStaged(self.vdevice_id));
+        }
+        let staged = self.alloc_s1_hwpt_object(hwpt_data)?;
+        self.staged_s1_hwpt_id = Some(staged);
+        Ok(staged)
+    }
 
-                match result {
-                    Ok(()) => {
-                        let s1_hwpt_id = s1_iommufd_hwpt_alloc.out_hwpt_id;
-                        self.s1_hwpt_id = Some(s1_hwpt_id);
-                        Ok(s1_hwpt_id)
-                    }
-                    Err(e) => Err(e),
-                }
-            }
-            IommufdHwptData::Vtd(_) => unimplemented!(),
-            IommufdHwptData::Raw { data_type, data } => {
-                let mut s1_iommufd_hwpt_alloc = iommu_hwpt_alloc {
-                    size: std::mem::size_of::<iommu_hwpt_alloc>() as u32,
-                    dev_id: self.dev_id,
-                    pt_id: self.viommu.viommu_id,
-                    data_type: *data_type,
-                    data_len: data.len() as u32,
-                    data_uptr: data.as_ptr() as u64,
-                    ..Default::default()
-                };
-                self.viommu
-                    .iommufd
-                    .alloc_iommu_hwpt(&mut s1_iommufd_hwpt_alloc)?;
-                let s1_hwpt_id = s1_iommufd_hwpt_alloc.out_hwpt_id;
-                self.s1_hwpt_id = Some(s1_hwpt_id);
-                Ok(s1_hwpt_id)
-            }
+    /// Promote the staged stage-1 HWPT to installed, then destroy the one it
+    /// replaces.
+    ///
+    /// Call only once the device is attached to the staged HWPT: destroying
+    /// the old one while the device is still attached to it fails with
+    /// `EBUSY`. The promotion happens first and unconditionally, so after
+    /// this call `s1_hwpt_id` names the HWPT the device is attached to even
+    /// when the destroy fails. Any `Err` other than `S1HwptNotStaged`
+    /// therefore means only that the OLD object could not be destroyed; it
+    /// is then leaked until the iommufd context closes, and the caller
+    /// should not retry or re-park the device on that account. The error
+    /// does not carry the leaked id: a caller that wants to log it must
+    /// read `s1_hwpt_id` before calling. Fails with `S1HwptNotStaged`,
+    /// changing nothing, when no stage is pending.
+    pub fn commit_staged_s1_hwpt(&mut self) -> Result<()> {
+        let Some(staged) = self.staged_s1_hwpt_id.take() else {
+            return Err(IommufdError::S1HwptNotStaged(self.vdevice_id));
+        };
+        // Promote first: the struct must never name a HWPT the device is no
+        // longer attached to, whatever happens to the old object below.
+        let old = self.s1_hwpt_id.replace(staged);
+        match old {
+            Some(old) => self.viommu.iommufd.destroy_iommu_object(old),
+            None => Ok(()),
         }
     }
 
-    /// Destroy s1 hwpt for the vDevice
+    /// Destroy the staged stage-1 HWPT, leaving the installed one alone.
+    ///
+    /// For the caller whose attach to the staged HWPT failed: the kernel
+    /// makes no change to the attachment on a failed replace, so the
+    /// installed stage-1 (if any) is still the one the device is on. The
+    /// stage is cleared even when the destroy fails, so the vDevice can be
+    /// staged again; the object is then leaked until the iommufd context
+    /// closes. Fails with `S1HwptNotStaged`, changing nothing, when no stage
+    /// is pending.
+    pub fn discard_staged_s1_hwpt(&mut self) -> Result<()> {
+        let Some(staged) = self.staged_s1_hwpt_id.take() else {
+            return Err(IommufdError::S1HwptNotStaged(self.vdevice_id));
+        };
+        self.viommu.iommufd.destroy_iommu_object(staged)
+    }
+
+    /// Destroy the installed s1 hwpt for the vDevice. A pending stage is
+    /// left as it is; use `discard_staged_s1_hwpt` for that.
     pub fn destroy_s1_hwpt(&mut self) -> Result<()> {
         if let Some(s1_hwpt_id) = self.s1_hwpt_id {
             self.viommu.iommufd.destroy_iommu_object(s1_hwpt_id)?;
@@ -698,6 +768,12 @@ impl Drop for IommufdVDevice {
             && let Err(e) = self.viommu.iommufd.destroy_iommu_object(s1_hwpt_id)
         {
             eprintln!("Failed to destroy s1_hwpt id {}: {}", s1_hwpt_id, e);
+        }
+
+        if let Some(staged) = self.staged_s1_hwpt_id
+            && let Err(e) = self.viommu.iommufd.destroy_iommu_object(staged)
+        {
+            eprintln!("Failed to destroy staged s1_hwpt id {staged}: {e}");
         }
     }
 }
@@ -1025,5 +1101,116 @@ mod tests {
     #[test]
     fn test_iommu_hw_info_type_tegra241_cmdqv() {
         assert_eq!(iommu_hw_info_type_IOMMU_HW_INFO_TYPE_TEGRA241_CMDQV, 3);
+    }
+
+    /// A vDevice whose iommufd is `/dev/null`, so every ioctl the verbs
+    /// issue fails with ENOTTY and every verb that returns before its
+    /// ioctl is distinguishable from one that does not. Wrapped in
+    /// `ManuallyDrop` so the destroy-on-drop paths never run against it.
+    fn null_backed_vdevice(
+        s1_hwpt_id: Option<u32>,
+        staged_s1_hwpt_id: Option<u32>,
+    ) -> std::mem::ManuallyDrop<IommufdVDevice> {
+        let iommufd = IommuFd::new_from_fd(File::open("/dev/null").unwrap());
+        let viommu = IommufdVIommu {
+            iommufd: Arc::new(iommufd),
+            viommu_id: 1,
+            dev_id: 2,
+            s2_hwpt_id: 3,
+            bypass_hwpt_id: None,
+            abort_hwpt_id: None,
+            cmdqv_data: None,
+        };
+        std::mem::ManuallyDrop::new(IommufdVDevice {
+            viommu: Arc::new(viommu),
+            dev_id: 2,
+            virt_id: 0x99,
+            vdevice_id: 42,
+            s1_hwpt_id,
+            staged_s1_hwpt_id,
+        })
+    }
+
+    fn raw_hwpt_data() -> IommufdHwptData {
+        IommufdHwptData::Raw {
+            data_type: 0xdead,
+            data: vec![0; 4],
+        }
+    }
+
+    #[test]
+    fn test_stage_refuses_a_second_stage_before_any_ioctl() {
+        let mut vdev = null_backed_vdevice(Some(3), Some(7));
+        // The guard must fire before IOMMU_HWPT_ALLOC is attempted: on
+        // /dev/null that ioctl would surface as IommuHwptAlloc instead.
+        assert!(matches!(
+            vdev.stage_s1_hwpt(&raw_hwpt_data()),
+            Err(IommufdError::S1HwptAlreadyStaged(42))
+        ));
+        assert_eq!(vdev.s1_hwpt_id, Some(3));
+        assert_eq!(vdev.staged_s1_hwpt_id, Some(7));
+    }
+
+    #[test]
+    fn test_allocate_refuses_when_a_stage1_is_installed() {
+        let mut vdev = null_backed_vdevice(Some(3), None);
+        assert!(matches!(
+            vdev.allocate_s1_hwpt(&raw_hwpt_data()),
+            Err(IommufdError::S1HwptAlreadyAllocated(42))
+        ));
+        assert_eq!(vdev.s1_hwpt_id, Some(3));
+        assert_eq!(vdev.staged_s1_hwpt_id, None);
+    }
+
+    #[test]
+    fn test_commit_and_discard_refuse_without_a_stage() {
+        let mut vdev = null_backed_vdevice(Some(3), None);
+        assert!(matches!(
+            vdev.commit_staged_s1_hwpt(),
+            Err(IommufdError::S1HwptNotStaged(42))
+        ));
+        assert!(matches!(
+            vdev.discard_staged_s1_hwpt(),
+            Err(IommufdError::S1HwptNotStaged(42))
+        ));
+        assert_eq!(vdev.s1_hwpt_id, Some(3));
+        assert_eq!(vdev.staged_s1_hwpt_id, None);
+    }
+
+    #[test]
+    fn test_commit_promotes_before_destroying_the_old_stage1() {
+        let mut vdev = null_backed_vdevice(Some(3), Some(9));
+        // The destroy of the old object (id 3) fails on /dev/null; the
+        // promotion must already have happened regardless.
+        assert!(matches!(
+            vdev.commit_staged_s1_hwpt(),
+            Err(IommufdError::IommuDestroy(_))
+        ));
+        assert_eq!(vdev.s1_hwpt_id, Some(9));
+        assert_eq!(vdev.staged_s1_hwpt_id, None);
+    }
+
+    #[test]
+    fn test_commit_with_nothing_installed_is_promotion_only() {
+        let mut vdev = null_backed_vdevice(None, Some(9));
+        // No old object, so no IOMMU_DESTROY is issued: on /dev/null any
+        // ioctl would have failed.
+        assert!(vdev.commit_staged_s1_hwpt().is_ok());
+        assert_eq!(vdev.s1_hwpt_id, Some(9));
+        assert_eq!(vdev.staged_s1_hwpt_id, None);
+    }
+
+    #[test]
+    fn test_discard_clears_the_stage_and_keeps_the_installed_stage1() {
+        let mut vdev = null_backed_vdevice(Some(3), Some(9));
+        // The destroy of the staged object fails on /dev/null; the stage
+        // is still cleared so the vDevice can be staged again, and the
+        // installed stage-1 is untouched.
+        assert!(matches!(
+            vdev.discard_staged_s1_hwpt(),
+            Err(IommufdError::IommuDestroy(_))
+        ));
+        assert_eq!(vdev.s1_hwpt_id, Some(3));
+        assert_eq!(vdev.staged_s1_hwpt_id, None);
     }
 }

@@ -26,6 +26,7 @@ use iommufd_ioctls::{
 /* From drivers/iommu/iommufd/iommufd_test.h */
 const IOMMU_TEST_CMD: u32 = (0x3b << 8) | (0x80 + 32); // _IO(';', 0xa0)
 const IOMMU_TEST_OP_MOCK_DOMAIN: u32 = 2;
+const IOMMU_TEST_OP_MOCK_DOMAIN_REPLACE: u32 = 10;
 const IOMMU_TEST_OP_TRIGGER_VEVENT: u32 = 17;
 const IOMMU_VIOMMU_TYPE_SELFTEST: u32 = 0xdeadbeef;
 const IOMMU_HWPT_DATA_SELFTEST: u32 = 0xdead;
@@ -53,6 +54,25 @@ struct TestCmdMockDomain {
 }
 
 impl Default for TestCmdMockDomain {
+    fn default() -> Self {
+        // SAFETY: an all-zero bit pattern is a valid value for every field.
+        unsafe { std::mem::zeroed() }
+    }
+}
+
+#[repr(C)]
+struct TestCmdMockDomainReplace {
+    size: u32,
+    op: u32,
+    id: u32,
+    _reserved: u32,
+    /// In: the HWPT (or IOAS) to move the mock device onto. Out: the same
+    /// id, echoed back by the kernel after `iommufd_device_replace`.
+    pt_id: u32,
+    _pad: [u8; (IOMMU_TEST_CMD_SIZE as usize) - 20],
+}
+
+impl Default for TestCmdMockDomainReplace {
     fn default() -> Self {
         // SAFETY: an all-zero bit pattern is a valid value for every field.
         unsafe { std::mem::zeroed() }
@@ -152,6 +172,20 @@ fn ioctl_test_cmd<T>(fd: &IommuFd, cmd: &mut T) -> std::io::Result<()> {
     }
 }
 
+/// Move the mock device `stdev_id` onto `pt_id` (a HWPT or an IOAS). The
+/// kernel services this as `iommufd_device_replace`, exactly what a VFIO
+/// attach to a new HWPT becomes, so it stands in for the VMM's attach.
+fn mock_domain_replace(fd: &IommuFd, stdev_id: u32, pt_id: u32) -> std::io::Result<()> {
+    let mut rep = TestCmdMockDomainReplace {
+        size: IOMMU_TEST_CMD_SIZE,
+        op: IOMMU_TEST_OP_MOCK_DOMAIN_REPLACE,
+        id: stdev_id,
+        pt_id,
+        ..Default::default()
+    };
+    ioctl_test_cmd(fd, &mut rep)
+}
+
 fn main() {
     let mut h = Harness { failed: 0 };
 
@@ -232,10 +266,24 @@ fn main() {
                 iotlb: IOMMU_TEST_IOTLB_DEFAULT,
             }),
         };
-        h.step(
+        let first_s1 = h.step(
             "nested S1 IOMMU_HWPT_ALLOC(pt=viommu, data=SELFTEST)",
             vdev.allocate_s1_hwpt(&hwpt_data),
         );
+
+        /* 6b. Attach the mock device to that nested S1, as the VMM attaches
+         * the VFIO endpoint after a fresh install. From here on the device
+         * is really on the installed S1, so a destroy of it would fail with
+         * EBUSY (the kernel's own selftest shows the same sequence) - the
+         * constraint the stage/commit verbs below exist to satisfy. This
+         * also leaves the mock's auto domain, which the kernel destroys as
+         * soon as its last device departs; the teardown parks on the IOAS. */
+        if let Some(first_s1) = first_s1 {
+            h.step(
+                "IOMMU_TEST_OP_MOCK_DOMAIN_REPLACE(stdev -> first S1)",
+                mock_domain_replace(&iommufd, mock.out_stdev_id, first_s1),
+            );
+        }
 
         /* 7. Cache invalidation through the vIOMMU. The mock's SELFTEST
          * cache-invalidate validates against a populated per-vdevice
@@ -304,8 +352,90 @@ fn main() {
             }
         }
 
-        /* 10. RAII teardown: nested hwpt + vdevice, then veventq */
+        /* 10. Atomic stage-1 replacement: stage a second nested S1 HWPT
+         * while the first stays installed AND attached (step 6b), move the
+         * mock device onto the staged one with a single replace, then
+         * commit, which promotes the staged id and destroys the old object.
+         * That destroy succeeds only because the replace has already moved
+         * the device off the old HWPT; before the replace it would be
+         * EBUSY. */
+        let old_s1 = vdev.s1_hwpt_id;
+        let staged = h.step(
+            "stage second nested S1 HWPT (installed one untouched)",
+            vdev.stage_s1_hwpt(&hwpt_data),
+        );
+        if let Some(staged) = staged {
+            h.step(
+                "installed S1 id unchanged while staged",
+                if vdev.s1_hwpt_id == old_s1 {
+                    Ok(())
+                } else {
+                    Err(format!("{:?} != {:?}", vdev.s1_hwpt_id, old_s1))
+                },
+            );
+            let replaced = h
+                .step(
+                    "IOMMU_TEST_OP_MOCK_DOMAIN_REPLACE(stdev -> staged S1)",
+                    mock_domain_replace(&iommufd, mock.out_stdev_id, staged),
+                )
+                .is_some();
+            if replaced {
+                h.step(
+                    "commit staged S1 (promote, then destroy the old)",
+                    vdev.commit_staged_s1_hwpt(),
+                );
+                h.step(
+                    "installed S1 id is the staged one after commit",
+                    if vdev.s1_hwpt_id == Some(staged) && vdev.staged_s1_hwpt_id.is_none() {
+                        Ok(())
+                    } else {
+                        Err(format!(
+                            "s1={:?} staged={:?}",
+                            vdev.s1_hwpt_id, vdev.staged_s1_hwpt_id
+                        ))
+                    },
+                );
+            } else {
+                h.step(
+                    "discard staged S1 after failed replace",
+                    vdev.discard_staged_s1_hwpt(),
+                );
+            }
+        }
+
+        /* 11. Stage-and-discard: the failed-attach shape. The installed S1
+         * must survive untouched. */
+        let installed = vdev.s1_hwpt_id;
+        if h.step(
+            "stage a third nested S1 HWPT",
+            vdev.stage_s1_hwpt(&hwpt_data),
+        )
+        .is_some()
+        {
+            h.step("discard the staged S1 HWPT", vdev.discard_staged_s1_hwpt());
+            h.step(
+                "installed S1 id unchanged after discard",
+                if vdev.s1_hwpt_id == installed && vdev.staged_s1_hwpt_id.is_none() {
+                    Ok(())
+                } else {
+                    Err(format!(
+                        "s1={:?} staged={:?}",
+                        vdev.s1_hwpt_id, vdev.staged_s1_hwpt_id
+                    ))
+                },
+            );
+        }
+
+        /* 12. RAII teardown: park the mock device on the IOAS (the kernel
+         * selftest's own idiom - the auto domain it started on was
+         * destroyed when the device left it in step 6b) so the installed
+         * nested S1 HWPT can be destroyed, then drop the vdevice, then the
+         * veventq. */
         drop(veventq);
+        h.step(
+            "IOMMU_TEST_OP_MOCK_DOMAIN_REPLACE(stdev -> IOAS)",
+            mock_domain_replace(&iommufd, mock.out_stdev_id, ioas_id),
+        );
         h.step("destroy nested S1 HWPT", vdev.destroy_s1_hwpt());
         drop(vdev); // destroys the vDEVICE
         println!("MOCKTEST ok    - vDEVICE/vEVENTQ teardown");
