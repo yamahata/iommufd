@@ -7,3 +7,6 @@ from the Linux kernel. It currently consists of the following crates:
 
 - `iommufd-bindings` -> Rust FFI bindings to IOMMUFD generated using bindgen
 - `iommufd-ioctls` -> Safe wrappers over IOMMUFD uAPIs
+- `mock-tests` -> An end-to-end exerciser for those wrappers against the
+  kernel's iommufd selftest mock driver (`CONFIG_IOMMUFD_TEST`), needing no
+  hardware. Not published; see `mock-tests/README.md`
