@@ -3,6 +3,9 @@
 ## Changed
 - Report destroy failures in `Drop` through the `log` crate instead of
   writing to stderr with `eprintln!`.
+- `IommufdVIommu::attach_bypass` and `attach_abort` return
+  `IommufdError::NoParkingTable` instead of panicking when the vIOMMU
+  has no bypass or abort page table.
 
 ## Added
 - Add `IommuFd::map_file_iommu_ioas`, wrapping `IOMMU_IOAS_MAP_FILE` to

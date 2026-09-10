@@ -439,19 +439,17 @@ impl IommufdVIommu {
     }
 
     pub fn attach_bypass(&self, device: &dyn AttachHwpt) -> Result<()> {
-        self.attach(
-            device,
-            self.bypass_hwpt_id
-                .expect("bypass table is allocated by `new`"),
-        )
+        let bypass_hwpt_id = self
+            .bypass_hwpt_id
+            .ok_or(IommufdError::NoParkingTable(self.viommu_id))?;
+        self.attach(device, bypass_hwpt_id)
     }
 
     pub fn attach_abort(&self, device: &dyn AttachHwpt) -> Result<()> {
-        self.attach(
-            device,
-            self.abort_hwpt_id
-                .expect("abort table is allocated by `new`"),
-        )
+        let abort_hwpt_id = self
+            .abort_hwpt_id
+            .ok_or(IommufdError::NoParkingTable(self.viommu_id))?;
+        self.attach(device, abort_hwpt_id)
     }
 
     fn attach(&self, device: &dyn AttachHwpt, hwpt_id: u32) -> Result<()> {
