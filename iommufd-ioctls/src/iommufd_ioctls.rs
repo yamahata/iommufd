@@ -54,6 +54,17 @@ impl IommuFd {
         iommufd_syscall::unmap_iommu_ioas(self, unmap)
     }
 
+    /// Map a file-backed range into the IOAS.
+    ///
+    /// `IOMMU_IOAS_MAP_FILE` takes the same flags and semantics as
+    /// `IOMMU_IOAS_MAP` but sources the pages from `map.fd` at byte offset
+    /// `map.start`. Callers set `IOMMU_IOAS_MAP_FIXED_IOVA`, which makes
+    /// `iova` an input, so the kernel writes no field back and the argument
+    /// is taken by shared reference like `map_iommu_ioas`.
+    pub fn map_file_iommu_ioas(&self, map: &iommu_ioas_map_file) -> Result<()> {
+        iommufd_syscall::map_file_iommu_ioas(self, map)
+    }
+
     pub fn alloc_iommu_hwpt(&self, hwpt_alloc: &mut iommu_hwpt_alloc) -> Result<()> {
         iommufd_syscall::alloc_iommu_hwpt(self, hwpt_alloc)
     }
@@ -727,6 +738,11 @@ ioctl_io_nr!(
     IOMMUFD_CMD_IOAS_UNMAP
 );
 ioctl_io_nr!(
+    IOMMU_IOAS_MAP_FILE,
+    IOMMUFD_TYPE as u32,
+    IOMMUFD_CMD_IOAS_MAP_FILE
+);
+ioctl_io_nr!(
     IOMMU_HWPT_ALLOC,
     IOMMUFD_TYPE as u32,
     IOMMUFD_CMD_HWPT_ALLOC
@@ -827,6 +843,20 @@ pub(crate) mod iommufd_syscall {
         let ret = unsafe { ioctl_with_mut_ref(iommufd, IOMMU_IOAS_UNMAP(), unmap) };
         if ret < 0 {
             Err(IommufdError::IommuIoasUnmap(SysError::last()))
+        } else {
+            Ok(())
+        }
+    }
+
+    pub(crate) fn map_file_iommu_ioas(iommufd: &IommuFd, map: &iommu_ioas_map_file) -> Result<()> {
+        // SAFETY:
+        // 1. The file descriptor provided by 'iommufd' is valid and open.
+        // 2. The 'map' points to initialized memory with expected data structure,
+        // and remains valid for the duration of syscall.
+        // 3. The return value is checked.
+        let ret = unsafe { ioctl_with_ref(iommufd, IOMMU_IOAS_MAP_FILE(), map) };
+        if ret < 0 {
+            Err(IommufdError::IommuIoasMapFile(SysError::last()))
         } else {
             Ok(())
         }
@@ -960,6 +990,7 @@ mod tests {
         assert_eq!(IOMMU_IOAS_ALLOC(), 15233);
         assert_eq!(IOMMU_IOAS_MAP(), 15237);
         assert_eq!(IOMMU_IOAS_UNMAP(), 15238);
+        assert_eq!(IOMMU_IOAS_MAP_FILE(), 15247);
         assert_eq!(IOMMU_HWPT_ALLOC(), 15241);
         assert_eq!(IOMMUFD_GET_HW_INFO(), 15242);
         assert_eq!(IOMMUFD_HWPT_INVALIDATE(), 15245);
@@ -967,5 +998,10 @@ mod tests {
         assert_eq!(IOMMU_VDEVICE_ALLOC(), 15249);
         assert_eq!(IOMMU_VEVENTQ_ALLOC(), 15251);
         assert_eq!(IOMMU_HW_QUEUE_ALLOC(), 15252);
+    }
+
+    #[test]
+    fn test_iommu_ioas_map_file_size() {
+        assert_eq!(std::mem::size_of::<iommu_ioas_map_file>(), 40);
     }
 }

@@ -5,6 +5,8 @@
   writing to stderr with `eprintln!`.
 
 ## Added
+- Add `IommuFd::map_file_iommu_ioas`, wrapping `IOMMU_IOAS_MAP_FILE` to
+  map a file-backed range into an IOAS.
 
 ## Fixed
 
