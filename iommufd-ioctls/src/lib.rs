@@ -58,6 +58,8 @@ pub enum IommufdError {
     UnknownIommu(iommu_hw_info_type),
     #[error("the data does not match the backing IOMMU: {0:?}")]
     IommuTypeMismatch(IommuKind),
+    #[error("the selftest mock driver is never reported by hardware probing")]
+    SelftestNotProbed,
     #[error("S1 HWPT already allocated with for the given vDevice: {0}")]
     S1HwptAlreadyAllocated(u32),
     #[error("Intel VT-d is not supported")]

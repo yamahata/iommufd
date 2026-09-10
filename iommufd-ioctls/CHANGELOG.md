@@ -9,6 +9,11 @@
   map a file-backed range into an IOAS.
 - Add `IommuFd::iova_ranges_iommu_ioas`, wrapping `IOMMU_IOAS_IOVA_RANGES`
   to query the allowed IOVA ranges and minimum IOVA alignment.
+- Add support for the kernel's iommufd selftest mock driver
+  (`CONFIG_IOMMUFD_TEST`): `IommuKind::Selftest`,
+  `IommufdVIommu::new_selftest`, `allocate_selftest_veventq`, the
+  `IommufdHwptData::Selftest` and `IommufdInvalidateData::Selftest`
+  payload variants, and the `viommu_id`/`s2_hwpt_id` accessors.
 
 ## Fixed
 

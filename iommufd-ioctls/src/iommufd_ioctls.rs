@@ -13,6 +13,37 @@ use vmm_sys_util::errno::Error as SysError;
 
 use crate::{IommufdError, Result};
 
+/// Identifiers of the kernel's iommufd selftest mock driver
+/// (`CONFIG_IOMMUFD_TEST`). These come from
+/// `drivers/iommu/iommufd/iommufd_test.h`, not from the public uAPI
+/// headers, so bindgen does not generate them; they are defined here so a
+/// test has one source of truth for them rather than its own copies.
+pub const IOMMU_VIOMMU_TYPE_SELFTEST: u32 = 0xdead_beef;
+/// `enum iommu_hwpt_data_type` value of the selftest mock driver.
+pub const IOMMU_HWPT_DATA_SELFTEST: u32 = 0xdead;
+/// `enum iommu_hwpt_invalidate_data_type` value of the selftest mock driver.
+pub const IOMMU_VIOMMU_INVALIDATE_DATA_SELFTEST: u32 = 0xdead_beef;
+/// `enum iommu_veventq_type` value of the selftest mock driver.
+pub const IOMMU_VEVENTQ_TYPE_SELFTEST: u32 = 0xbeef_beef;
+/// `enum iommu_hw_info_type` value of the selftest mock driver.
+pub const IOMMU_HW_INFO_TYPE_SELFTEST: u32 = 0xfeed_beef;
+
+/// `struct iommu_hwpt_selftest` — the mock driver's nested-HWPT payload.
+#[repr(C)]
+#[derive(Debug, Default, Copy, Clone)]
+pub struct iommu_hwpt_selftest {
+    pub iotlb: u32,
+}
+
+/// `struct iommu_viommu_invalidate_selftest` — the mock driver's
+/// invalidation entry.
+#[repr(C)]
+#[derive(Debug, Default, Copy, Clone)]
+pub struct iommu_viommu_invalidate_selftest {
+    pub flags: u32,
+    pub cache_id: u32,
+}
+
 pub struct IommuFd {
     iommufd: File,
 }
@@ -143,6 +174,8 @@ impl IommuFd {
 pub enum IommufdInvalidateData {
     Smmuv3(iommu_viommu_arm_smmuv3_invalidate),
     Vtd(iommu_hwpt_vtd_s1_invalidate),
+    /// Invalidation entry for the kernel's iommufd selftest mock driver.
+    Selftest(iommu_viommu_invalidate_selftest),
 }
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
@@ -151,6 +184,12 @@ pub enum IommuKind {
     Smmuv3Cmdqv,
     Vtd,
     Amd,
+    /// The kernel's own iommufd selftest mock driver
+    /// (`CONFIG_IOMMUFD_TEST`). Never returned by [`IommuKind::query`] -
+    /// the mock driver reports a hardware-info type no real IOMMU uses, so
+    /// probing must not silently classify hardware as a mock. Reachable only
+    /// by explicitly constructing a selftest vIOMMU.
+    Selftest,
 }
 
 impl IommuKind {
@@ -203,7 +242,12 @@ impl IommuKind {
 #[derive(Debug, Copy, Clone)]
 pub enum IommufdViommuData {
     Smmuv3,
-    Tegra241Cmdqv { mmap_offset: u64, mmap_length: u64 },
+    Tegra241Cmdqv {
+        mmap_offset: u64,
+        mmap_length: u64,
+    },
+    /// A selftest vIOMMU carries no driver data.
+    Selftest,
 }
 
 pub struct IommufdVIommu {
@@ -245,6 +289,9 @@ impl IommufdVIommu {
             }
             IommuKind::Vtd => return Err(IommufdError::VtdUnsupported),
             IommuKind::Amd => return Err(IommufdError::AmdUnsupported),
+            // `new` probes the hardware, and `query` never reports Selftest;
+            // a mock vIOMMU is built by `new_selftest`.
+            IommuKind::Selftest => return Err(IommufdError::SelftestNotProbed),
         };
 
         let mut s2_iommufd_hwpt_alloc = iommu_hwpt_alloc {
@@ -299,12 +346,60 @@ impl IommufdVIommu {
         Ok(viommu)
     }
 
+    /// Allocate a vIOMMU backed by the kernel's iommufd selftest mock
+    /// driver, for tests running against `CONFIG_IOMMUFD_TEST` with no
+    /// hardware.
+    ///
+    /// Unlike [`IommufdVIommu::new`] this does not probe the device's
+    /// hardware type - the mock driver is not real hardware and
+    /// [`IommuKind::query`] deliberately refuses to report it - and it
+    /// allocates no bypass or abort stage-1 tables, because the mock driver
+    /// has no STE to describe them with. [`IommufdVIommu::attach_bypass`]
+    /// and [`IommufdVIommu::attach_abort`] therefore must not be called on
+    /// the result.
+    pub fn new_selftest(iommufd: Arc<IommuFd>, ioas_id: u32, dev_id: u32) -> Result<Self> {
+        let mut s2_hwpt_alloc = iommu_hwpt_alloc {
+            size: std::mem::size_of::<iommu_hwpt_alloc>() as u32,
+            flags: iommufd_hwpt_alloc_flags_IOMMU_HWPT_ALLOC_NEST_PARENT,
+            dev_id,
+            pt_id: ioas_id,
+            data_type: iommu_hwpt_data_type_IOMMU_HWPT_DATA_NONE,
+            ..Default::default()
+        };
+        iommufd.alloc_iommu_hwpt(&mut s2_hwpt_alloc)?;
+        let s2_hwpt_id = s2_hwpt_alloc.out_hwpt_id;
+
+        let mut viommu_alloc = iommu_viommu_alloc {
+            size: std::mem::size_of::<iommu_viommu_alloc>() as u32,
+            type_: IOMMU_VIOMMU_TYPE_SELFTEST,
+            dev_id,
+            hwpt_id: s2_hwpt_id,
+            ..Default::default()
+        };
+        iommufd.alloc_iommu_viommu(&mut viommu_alloc)?;
+
+        Ok(IommufdVIommu {
+            iommufd,
+            viommu_id: viommu_alloc.out_viommu_id,
+            s2_hwpt_id,
+            bypass_hwpt_id: None,
+            abort_hwpt_id: None,
+            kind: IommuKind::Selftest,
+            data: IommufdViommuData::Selftest,
+        })
+    }
+
     pub fn alloc_s1_hwpt(&self, dev_id: u32, hwpt_data: &IommufdHwptData) -> Result<u32> {
         let (data_type, data_len, data_uptr) = match (self.kind, hwpt_data) {
             (IommuKind::Smmuv3 | IommuKind::Smmuv3Cmdqv, IommufdHwptData::Smmuv3(data)) => (
                 iommu_hwpt_data_type_IOMMU_HWPT_DATA_ARM_SMMUV3,
                 std::mem::size_of::<iommu_hwpt_arm_smmuv3>() as u32,
                 data as *const iommu_hwpt_arm_smmuv3 as u64,
+            ),
+            (IommuKind::Selftest, IommufdHwptData::Selftest(data)) => (
+                IOMMU_HWPT_DATA_SELFTEST,
+                std::mem::size_of::<iommu_hwpt_selftest>() as u32,
+                data as *const iommu_hwpt_selftest as u64,
             ),
             (IommuKind::Vtd, IommufdHwptData::Vtd(_)) => return Err(IommufdError::VtdUnsupported),
             (kind, _) => return Err(IommufdError::IommuTypeMismatch(kind)),
@@ -326,6 +421,17 @@ impl IommufdVIommu {
 
     pub fn data(&self) -> IommufdViommuData {
         self.data
+    }
+
+    /// The kernel's id for this vIOMMU object.
+    pub fn viommu_id(&self) -> u32 {
+        self.viommu_id
+    }
+
+    /// The kernel's id for the stage-2 nesting-parent HWPT this vIOMMU was
+    /// allocated against.
+    pub fn s2_hwpt_id(&self) -> u32 {
+        self.s2_hwpt_id
     }
 
     pub fn iommufd(&self) -> &Arc<IommuFd> {
@@ -375,6 +481,20 @@ impl IommufdVIommu {
                     Ok(false)
                 }
             }
+            (IommuKind::Selftest, IommufdInvalidateData::Selftest(data)) => {
+                let mut hw_invalidate = iommu_hwpt_invalidate {
+                    size: std::mem::size_of::<iommu_hwpt_invalidate>() as u32,
+                    hwpt_id: self.viommu_id,
+                    data_type: IOMMU_VIOMMU_INVALIDATE_DATA_SELFTEST,
+                    entry_len: std::mem::size_of::<iommu_viommu_invalidate_selftest>() as u32,
+                    entry_num: 1,
+                    data_uptr: data as *mut iommu_viommu_invalidate_selftest as u64,
+                    ..Default::default()
+                };
+                self.iommufd.invalidate_hwpt(&mut hw_invalidate)?;
+
+                Ok(hw_invalidate.entry_num == 1)
+            }
             (IommuKind::Vtd, IommufdInvalidateData::Vtd(_)) => Err(IommufdError::VtdUnsupported),
             (kind, _) => Err(IommufdError::IommuTypeMismatch(kind)),
         }
@@ -391,8 +511,21 @@ impl IommufdVIommu {
             }
             IommuKind::Vtd => return Err(IommufdError::VtdUnsupported),
             IommuKind::Amd => return Err(IommufdError::AmdUnsupported),
+            IommuKind::Selftest => return Err(IommufdError::SelftestNotProbed),
         };
         self.alloc_veventq(veventq_type, depth)
+    }
+
+    /// Allocate a vEVENTQ of the selftest mock driver's type.
+    ///
+    /// Mirrors [`IommufdVIommu::allocate_cmdqv_veventq`]: the type is not
+    /// inferable from the vIOMMU's kind, so it gets its own constructor
+    /// rather than widening [`IommufdVIommu::allocate_veventq`].
+    pub fn allocate_selftest_veventq(self: &Arc<Self>, depth: u32) -> Result<IommufdVEventQ> {
+        if self.kind != IommuKind::Selftest {
+            return Err(IommufdError::IommuTypeMismatch(self.kind));
+        }
+        self.alloc_veventq(IOMMU_VEVENTQ_TYPE_SELFTEST, depth)
     }
 
     pub fn allocate_cmdqv_veventq(self: &Arc<Self>, depth: u32) -> Result<IommufdVEventQ> {
@@ -436,7 +569,9 @@ impl IommufdVIommu {
             IommufdViommuData::Tegra241Cmdqv { .. } => {
                 iommu_hw_queue_type_IOMMU_HW_QUEUE_TYPE_TEGRA241_CMDQV
             }
-            IommufdViommuData::Smmuv3 => return Err(IommufdError::HwQueueUnsupported),
+            IommufdViommuData::Smmuv3 | IommufdViommuData::Selftest => {
+                return Err(IommufdError::HwQueueUnsupported);
+            }
         };
 
         let mut hw_queue_alloc = iommu_hw_queue_alloc {
@@ -620,6 +755,8 @@ pub enum IommufdHwInfoData {
 pub enum IommufdHwptData {
     Smmuv3(iommu_hwpt_arm_smmuv3),
     Vtd(iommu_hwpt_vtd_s1),
+    /// Nested-HWPT data for the kernel's iommufd selftest mock driver.
+    Selftest(iommu_hwpt_selftest),
 }
 
 /// A device attachable to an iommufd page table.
