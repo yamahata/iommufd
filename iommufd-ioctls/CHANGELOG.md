@@ -7,6 +7,8 @@
 ## Added
 - Add `IommuFd::map_file_iommu_ioas`, wrapping `IOMMU_IOAS_MAP_FILE` to
   map a file-backed range into an IOAS.
+- Add `IommuFd::iova_ranges_iommu_ioas`, wrapping `IOMMU_IOAS_IOVA_RANGES`
+  to query the allowed IOVA ranges and minimum IOVA alignment.
 
 ## Fixed
 
