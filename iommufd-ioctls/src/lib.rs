@@ -62,6 +62,10 @@ pub enum IommufdError {
     SelftestNotProbed,
     #[error("S1 HWPT already allocated with for the given vDevice: {0}")]
     S1HwptAlreadyAllocated(u32),
+    #[error("an S1 HWPT is already staged for the given vDevice: {0}")]
+    S1HwptAlreadyStaged(u32),
+    #[error("no S1 HWPT is staged for the given vDevice: {0}")]
+    S1HwptNotStaged(u32),
     #[error("Intel VT-d is not supported")]
     VtdUnsupported,
     #[error("AMD IOMMU is not supported")]

@@ -14,6 +14,15 @@
   `IommufdVIommu::new_selftest`, `allocate_selftest_veventq`, the
   `IommufdHwptData::Selftest` and `IommufdInvalidateData::Selftest`
   payload variants, and the `viommu_id`/`s2_hwpt_id` accessors.
+- Add `IommufdVDevice::stage_s1_hwpt`,
+  `IommufdVDevice::commit_staged_s1_hwpt` and
+  `IommufdVDevice::discard_staged_s1_hwpt`, letting a vDevice hold a second
+  stage-1 HWPT so a stage-1 can be replaced atomically: the device is
+  attached to the staged page table (serviced as `iommufd_device_replace`,
+  so it is never without a translation) and the outgoing one is destroyed
+  only once that attach has succeeded.
+- Add `IommufdVDevice::s1_hwpt_id` and
+  `IommufdVDevice::staged_s1_hwpt_id` accessors.
 
 ## Fixed
 
